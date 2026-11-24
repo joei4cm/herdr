@@ -641,6 +641,11 @@ fn read_initial_request_line_with_limits(
     let deadline = Instant::now() + timeout;
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
+    // The first request line almost always lands within a few milliseconds of
+    // the accept, but a polling read must not pay a full CONNECTION_POLL_INTERVAL
+    // to see it. Start at 1 ms and double up to the shared interval; a client
+    // that never sends still settles at the 100 ms tick before its deadline.
+    let mut backoff = Duration::from_millis(1);
 
     let result = loop {
         let read = match poll_local_stream_read(stream, &mut byte) {
@@ -650,6 +655,10 @@ fn read_initial_request_line_with_limits(
         match read {
             LocalStreamRead::Closed => break Ok(None),
             LocalStreamRead::Data => {
+                // A request line that arrives in segments should not inherit the
+                // backoff of the previous gap. Reset it so the next segment is
+                // seen as promptly as the first.
+                backoff = Duration::from_millis(1);
                 bytes.push(byte[0]);
                 if byte[0] == b'\n' {
                     break String::from_utf8(bytes)
@@ -670,7 +679,8 @@ fn read_initial_request_line_with_limits(
                         "timed out reading api request",
                     ));
                 }
-                std::thread::sleep(CONNECTION_POLL_INTERVAL);
+                std::thread::sleep(backoff);
+                backoff = backoff.mul_f64(2.0).min(CONNECTION_POLL_INTERVAL);
             }
         }
     };
@@ -1845,6 +1855,44 @@ mod tests {
 
         let result = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(result.is_ok());
+        server_thread.join().unwrap();
+    }
+
+    /// A request line written a few tens of milliseconds after connect must not
+    /// wait for a full CONNECTION_POLL_INTERVAL to be read. The initial-read
+    /// backoff starts at 1 ms and doubles, so a 50 ms write is answered in
+    /// roughly 50 ms, not ~100 ms.
+    #[test]
+    fn initial_request_line_is_read_without_waiting_a_full_tick() {
+        let (mut client, mut server, _path) = local_stream_pair("initial-backoff");
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let server_thread = std::thread::spawn(move || {
+            let start = Instant::now();
+            let line = read_initial_request_line_with_limits(
+                &mut server,
+                Duration::from_secs(5),
+                MAX_INITIAL_REQUEST_BYTES,
+            )
+            .expect("read request line");
+            done_tx.send((line, start.elapsed())).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        client
+            .write_all(br#"{"id":"1","method":"ping","params":{}}"#)
+            .unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+
+        let (line, elapsed) = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            line.as_deref(),
+            Some("{\"id\":\"1\",\"method\":\"ping\",\"params\":{}}\n")
+        );
+        // The backoff lets the 50 ms write be answered well under the 100 ms tick.
+        assert!(
+            elapsed < Duration::from_millis(90),
+            "initial request took {elapsed:?}; expected < 90 ms"
+        );
         server_thread.join().unwrap();
     }
 }
