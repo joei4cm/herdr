@@ -1,7 +1,7 @@
 id = "agy"
-version = "2026.10.05.1"
+version = "2026.11.26.1"
 min_engine_version = 1
-updated_at = "2026-10-05T00:00:00Z"
+updated_at = "2026-11-26T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
 
 # Evidence: Antigravity CLI 1.2.17 live pane reads, plus reporter captures
@@ -11,6 +11,9 @@ aliases = ["antigravity", "antigravity-cli"]
 # the "esc to cancel" footer:
 #   permission: "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
 #               "↑/↓ Navigate · tab Amend · f full diff"
+#   permission (1.5.x, compact hints — file access, create, edit):
+#               "↑/↓ Navigate"
+#               "↑/↓ Navigate · f full diff"
 #   question:   "↑/↓ Navigate · enter Select · esc Skip"
 #   trust:      "↑/↓ Navigate · enter Confirm"
 #   slash menu: "↑/↓ Navigate · enter Select · tab Complete" (idle)
@@ -49,6 +52,20 @@ priority = 280
 region = "bottom_non_empty_lines(8)"
 visible_blocker = true
 contains = ["do you trust the contents of this project?", "yes, i trust this folder", "enter confirm"]
+
+# 1.5.x dialogs whose hint row keeps only "Navigate" (file access) or adds
+# "f full diff" (create/edit) without "tab Amend". The gate matches any
+# permission/question dialog hint plus the "esc to cancel" footer; it stays
+# below question_prompt and trust_prompt so those more specific rules keep
+# their attribution, and the working turn's "─── + esc to cancel" footer has
+# no "navigate" hint row (#6141).
+[[rules]]
+id = "dialog_navigate_footer"
+state = "blocked"
+priority = 275
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "esc to cancel"]
 
 # Pre-1.1.28 permission dialog.
 [[rules]]
