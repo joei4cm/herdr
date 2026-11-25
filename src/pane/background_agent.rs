@@ -11,12 +11,15 @@ use crate::detect::Agent;
 /// foreground probe no longer finds that agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AgentJobStatus {
-    /// Untracked, still in the foreground, or gone without having been held.
+    /// Untracked, or the tracked process is still where the probe sees it.
     Unknown,
     /// Alive outside the foreground, such as a job stopped with ctrl-z.
     Background,
     /// Was held in the background and has since exited.
     ExitedInBackground,
+    /// Was never held, and its tracked process is gone from the pane's
+    /// session, such as an agent that exited behind a nested shell.
+    ExitedInFront,
     /// Was held, and a different process of the same agent kind is in front.
     ReplacedInFront,
 }
@@ -68,7 +71,11 @@ impl AgentJobTracker {
             }
             Some(_) => AgentJobStatus::Unknown,
             None if self.in_background => AgentJobStatus::ExitedInBackground,
-            None => AgentJobStatus::Unknown,
+            // The tracked process is verifiably gone (pid and start token no
+            // longer resolve to a live process in the pane's session), so the
+            // agent ended even though it never made a round trip through the
+            // background.
+            None => AgentJobStatus::ExitedInFront,
         }
     }
 
@@ -147,8 +154,18 @@ mod tests {
     }
 
     #[test]
-    fn agent_that_exited_in_front_is_unknown() {
+    fn agent_that_exited_in_front_reports_an_exit() {
         let tracker = acquired(Agent::Claude);
+
+        assert_eq!(
+            tracker.status(true, SHELL, Some(SHELL), |_, _, _| None),
+            AgentJobStatus::ExitedInFront
+        );
+    }
+
+    #[test]
+    fn untracked_missing_agent_stays_unknown() {
+        let tracker = AgentJobTracker::default();
 
         assert_eq!(
             tracker.status(true, SHELL, Some(SHELL), |_, _, _| None),

@@ -492,7 +492,15 @@ fn foreground_shell_agent_action(
     }
     match agent_job {
         AgentJobStatus::Background => return ForegroundShellAgentAction::HoldBackgroundAgent,
-        AgentJobStatus::ExitedInBackground => return ForegroundShellAgentAction::ReportProcessExit,
+        AgentJobStatus::ExitedInBackground | AgentJobStatus::ExitedInFront => {
+            // A tracked agent process whose liveness check fails has exited,
+            // whichever shell sits in front of it. Waiting for the miss
+            // counter cannot clear it under full-lifecycle hook authority,
+            // which skips steady-state probes while the foreground group is
+            // stable, so an agent run from a nested shell would stay listed
+            // until that shell exits.
+            return ForegroundShellAgentAction::ReportProcessExit;
+        }
         AgentJobStatus::Unknown | AgentJobStatus::ReplacedInFront => {}
     }
 
@@ -5584,6 +5592,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unheld_agent_job_exit_is_reported_behind_any_foreground_job() {
+        for foreground_is_pane_shell in [true, false] {
+            assert_eq!(
+                foreground_shell_agent_action(
+                    Some(Agent::OpenCode),
+                    None,
+                    foreground_is_pane_shell,
+                    false,
+                    AgentJobStatus::ExitedInFront
+                ),
+                ForegroundShellAgentAction::ReportProcessExit
+            );
+        }
+    }
+
     /// Drives `observe_foreground_agent` the way the detection loops do, against
     /// a fake process table of `pid -> (start token, process group)`.
     mod held_agent {
@@ -5756,6 +5780,26 @@ mod tests {
         pane.processes.exit(held_agent::WRAPPER_JOB);
 
         pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn agent_that_exits_behind_a_nested_shell_reports_its_exit() {
+        let mut pane = held_agent::Pane::with_agent(Agent::OpenCode);
+
+        // The agent was never suspended; it exits while a nested shell
+        // (group 30) is back in front of the pane's own shell.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+
+        assert_eq!(
+            pane.probe(None, 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe(None, 30),
+            (ForegroundShellAgentAction::ClearAgent, true)
+        );
+        assert_eq!(pane.presence.current_agent(), None);
     }
 
     #[test]
