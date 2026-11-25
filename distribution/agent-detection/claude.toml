@@ -1,5 +1,5 @@
 id = "claude"
-version = "2026.11.25.2"
+version = "2026.11.25.3"
 min_engine_version = 2
 updated_at = "2026-11-25T00:00:00Z"
 aliases = ["claude-code"]
@@ -7,7 +7,13 @@ aliases = ["claude-code"]
 [[rules]]
 id = "osc_title_working"
 state = "working"
-priority = 1100
+# The CLI can stop updating its title while the turn is over (Agent Teams
+# view, modal dialogs), so a busy glyph may outlive the turn (#6183). Current
+# screen evidence outranks the title: blocked forms (980), the live turn
+# spinner (970), and the visible prompt box (950). Keep the title above the
+# historical-text rules (850 and below) so old scrollback cannot silence a
+# live busy title.
+priority = 940
 region = "osc_title"
 visible_working = true
 # Braille covers <= 2.1.227; half-circles are the 2.1.228 busy spinner.
