@@ -93,7 +93,7 @@ Claude Code や OpenCode などの全画面エージェントは、トランス�
 
 完全な応答を取得できない場合は、一時ディレクトリの Markdown ファイルに応答を書き込み、ファイルパスだけを返すようエージェントに依頼して、そのファイルを直接読み取ってください。
 
-成功した `agent start`、`agent prompt`、`agent wait` は現在のエージェントを `.result.agent` に返します。`pane wait-output` は `.result.pane_id`、`.result.matched_line`、一致したスナップショット `.result.read` を返します。
+成功した `agent start` と `agent wait` はエージェントを `.result.agent` に返します。`--wait` なしの `agent prompt` は送信前のエージェントのスナップショットを返し、`.result.turn_start` は `"unconfirmed"` です。書き込みは確認されていますが、新しいターンが始まったかは不明です。そのため、ステータスと `state_change_seq` はターン開始の証拠にはなりません。`--wait` を使う場合は観測されたエージェントが返ります。古いサーバーでは `turn_start` が省略されることがあり、その場合もターン開始は確認できません。`pane wait-output` は `.result.pane_id`、`.result.matched_line`、一致したスナップショット `.result.read` を返します。
 
 wait コマンドにはデフォルトのタイムアウトがなく、無期限に待機できます。タイムアウトやサーバーエラーでは JSON エラーを stderr に出して終了コード 1、CLI 構文エラーでは終了コード 2 を返します。
 

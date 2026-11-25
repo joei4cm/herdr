@@ -93,7 +93,7 @@ Claude Code 和 OpenCode 等全屏智能体会把对话历史绘制在终端的�
 
 如果仍无法取得完整回复,可以让智能体把回复以 Markdown 格式写入临时目录,只回复文件路径,然后直接读取该文件。
 
-成功的 `agent start`、`agent prompt` 和 `agent wait` 会在 `.result.agent` 返回当前智能体。`pane wait-output` 返回 `.result.pane_id`、`.result.matched_line` 以及位于 `.result.read` 的匹配快照。
+成功的 `agent start` 和 `agent wait` 在 `.result.agent` 返回智能体。不带 `--wait` 的 `agent prompt` 返回提交前的智能体快照，`.result.turn_start` 为 `"unconfirmed"`：写入已确认，但新轮次可能尚未开始。因此其中的状态和 `state_change_seq` 不能证明轮次已经开始。带 `--wait` 时，响应返回观察到的智能体。旧服务器可能不返回 `turn_start`；缺少该字段不代表轮次已开始。`pane wait-output` 返回 `.result.pane_id`、`.result.matched_line` 以及位于 `.result.read` 的匹配快照。
 
 等待命令没有默认超时,可能无限等待。超时或服务器错误会把 JSON 错误写到 stderr 并以状态 1 退出;CLI 语法错误以状态 2 退出。
 

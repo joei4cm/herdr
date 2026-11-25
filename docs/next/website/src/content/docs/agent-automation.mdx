@@ -93,7 +93,7 @@ Other reads remain passive. Herdr does not move the application viewport for `vi
 
 If a full response is still unavailable, ask the agent to write it as Markdown in a temporary directory and reply only with the file path, then read the file directly.
 
-Successful `agent start`, `agent prompt`, and `agent wait` commands return the current agent at `.result.agent`. `pane wait-output` returns `.result.pane_id`, `.result.matched_line`, and the matched snapshot at `.result.read`.
+Successful `agent start` and `agent wait` commands return the agent at `.result.agent`. Without `--wait`, `agent prompt` returns the agent snapshot from before submission and `.result.turn_start` is `"unconfirmed"`: the write was acknowledged, but the new turn may or may not have started. Its status and `state_change_seq` therefore do not prove that the turn started. With `--wait`, the response instead contains the observed agent. Older servers may omit `turn_start`; absence does not confirm a turn. `pane wait-output` returns `.result.pane_id`, `.result.matched_line`, and the matched snapshot at `.result.read`.
 
 Wait commands have no default timeout and can wait indefinitely. On timeout or another server error, CLI commands print a JSON error to stderr and exit with status 1; invalid CLI syntax exits with status 2.
 

@@ -103,6 +103,9 @@ pub enum ResponseResult {
     },
     AgentPrompted {
         agent: AgentInfo,
+        /// A submission acknowledgement does not establish that a new turn started.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_start: Option<String>,
     },
     AgentList {
         agents: Vec<AgentInfo>,

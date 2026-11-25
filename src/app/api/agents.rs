@@ -107,7 +107,13 @@ impl App {
                 return;
             };
             let response = match completion.recv() {
-                Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+                Ok(Ok(())) => encode_success(
+                    id,
+                    ResponseResult::AgentPrompted {
+                        agent,
+                        turn_start: Some("unconfirmed".into()),
+                    },
+                ),
                 Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
                     encode_error(id, "timeout", err.to_string())
                 }
@@ -604,7 +610,7 @@ mod tests {
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Working);
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
         let (runtime, mut rx) =
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
                 80, 24, 0, b"", 2,
@@ -624,14 +630,34 @@ mod tests {
             },
         );
         assert!(response_rx.try_recv().is_err());
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::OpenCode), AgentState::Working);
         let response = response_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("agent prompt responds after submission");
+        let mut legacy: serde_json::Value = serde_json::from_str(&response).unwrap();
+        legacy["result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("turn_start");
+        let legacy: SuccessResponse = serde_json::from_value(legacy).unwrap();
+        assert!(matches!(
+            legacy.result,
+            ResponseResult::AgentPrompted {
+                turn_start: None,
+                ..
+            }
+        ));
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let ResponseResult::AgentPrompted { agent, .. } = success.result else {
+        let ResponseResult::AgentPrompted { agent, turn_start } = success.result else {
             panic!("expected prompted response");
         };
         assert_eq!(agent.name.as_deref(), Some("reviewer"));
+        assert_eq!(agent.agent_status, crate::api::schema::AgentStatus::Idle);
+        assert_eq!(turn_start.as_deref(), Some("unconfirmed"));
         assert_eq!(
             rx.try_recv().unwrap(),
             Bytes::from_static(b"\x1b[200~A != B\x1b[201~")
