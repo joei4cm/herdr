@@ -261,6 +261,57 @@ test("routes nested child prompts to their own root, not the last active root", 
   ]);
 });
 
+test("ignores assistant message info when tracking child sessions", async () => {
+  const plugin = await loadPlugin();
+
+  // Assistant messages carry info.id and a required parentID pointing at the
+  // user message; they must not be tracked as child sessions (issue #6145).
+  await plugin.event({
+    event: {
+      type: "message.updated",
+      properties: {
+        sessionID: "root-session",
+        info: { id: "msg_assistant", parentID: "msg_user" },
+      },
+    },
+  });
+  await plugin.event({
+    event: { type: "permission.asked", properties: { sessionID: "msg_assistant" } },
+  });
+
+  // The message id is not a tracked child, so it is reported as-is instead of
+  // being resolved to its parent message id.
+  expect(requests.map(requestState)).toEqual(["blocked"]);
+  expect(requests.map(requestSessionID)).toEqual(["msg_assistant"]);
+});
+
+test("prunes child sessions when they are deleted", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin.event({
+    event: { type: "permission.asked", properties: { sessionID: "child-session" } },
+  });
+  await plugin.event({
+    event: { type: "session.deleted", properties: { sessionID: "child-session" } },
+  });
+  await plugin.event({
+    event: { type: "permission.asked", properties: { sessionID: "child-session" } },
+  });
+
+  // Before deletion the child resolves to its root; after deletion it no
+  // longer does (issue #6145).
+  expect(requests.map(requestState)).toEqual(["blocked", "blocked"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "child-session"]);
+});
+
 test("only local run and Mini own server lifecycle, never shared servers or TUI workers", async () => {
   for (const args of [
     ["run"], ["run", "--session", "existing"], ["--mini"], ["--mini", "--session", "existing"],

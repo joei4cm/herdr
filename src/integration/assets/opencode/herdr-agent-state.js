@@ -162,8 +162,18 @@ export const HerdrAgentStatePlugin = async () => {
       const sessionID = sessionIDFromProperties(properties);
 
       const info = properties.info;
-      if (info?.id && info.parentID) {
+      // Only session.* events carry a Session in info. message.updated events
+      // carry a Message, and assistant messages have a required parentID, so
+      // accepting every event here fills the map with message ids (issue
+      // #6145).
+      if (type?.startsWith("session.") && info?.id && info.parentID) {
         childSessions.set(info.id, info.parentID);
+      }
+      // Prune before the child-session guard below can swallow the event:
+      // a deleted child session matches the guard and would never reach the
+      // switch.
+      if (type === "session.deleted" && sessionID) {
+        childSessions.delete(sessionID);
       }
       if (sessionID && childSessions.has(sessionID)) {
         const state = CHILD_EVENT_STATES.get(type);
