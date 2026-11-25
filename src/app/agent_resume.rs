@@ -305,7 +305,7 @@ impl App {
                 err = %err,
                 "failed to send deferred agent resume command to shell"
             );
-            runtime.shutdown();
+            runtime.shutdown(None);
             return false;
         }
 
@@ -610,7 +610,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -644,7 +644,7 @@ mod tests {
         assert!(app.terminal_runtimes.get(&terminal_id).is_some());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -707,7 +707,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -772,7 +772,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -833,7 +833,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -893,7 +893,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -949,7 +949,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 

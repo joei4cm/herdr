@@ -831,7 +831,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let remove = crate::worktree::build_worktree_remove_command(
             &repo,
@@ -916,7 +916,7 @@ mod tests {
         }));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(worktree_root);
         let _ = std::fs::remove_dir_all(repo);
@@ -973,7 +973,7 @@ mod tests {
         assert!(app.pending_api_worktree_creates.is_empty());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(worktree_root);
         let _ = std::fs::remove_dir_all(repo);
@@ -1175,7 +1175,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(checkout);
         let _ = std::fs::remove_dir_all(repo);
@@ -1225,7 +1225,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let remove = crate::worktree::build_worktree_remove_command(
             &repo,

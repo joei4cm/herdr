@@ -207,6 +207,6 @@ async fn pane_created_during_appearance_hold_gets_consistent_pair() {
         [Bytes::from_static(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\")]
     );
     for (_, runtime) in app.terminal_runtimes.drain() {
-        runtime.shutdown();
+        runtime.shutdown(None);
     }
 }

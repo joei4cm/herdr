@@ -147,7 +147,7 @@ mod tests {
         );
 
         for (_, runtime) in terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(temp_root);
     }

@@ -99,7 +99,7 @@ mod tests {
                 Arc::new(RenderSignal::new()),
             )
             .unwrap();
-            runtime.shutdown();
+            runtime.shutdown(None);
             tokio::time::timeout(Duration::from_secs(1), async {
                 while let Some(event) = event_rx.recv().await {
                     if let AppEvent::PaneDied {

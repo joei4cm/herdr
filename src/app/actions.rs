@@ -638,10 +638,18 @@ impl AppState {
                 })
             });
             if !still_attached
-                && self.terminals.remove(&terminal_id).is_some()
-                && !self.terminal_runtime_shutdowns.contains(&terminal_id)
+                && self.terminals.contains_key(&terminal_id)
+                && !self
+                    .terminal_runtime_shutdowns
+                    .iter()
+                    .any(|(queued_id, _)| *queued_id == terminal_id)
             {
-                self.terminal_runtime_shutdowns.push(terminal_id);
+                // The terminal metadata leaves the state here, so the agent
+                // grace decision has to be captured now (#6094).
+                let agent_grace = self.agent_shutdown_grace_for(&terminal_id);
+                self.terminals.remove(&terminal_id);
+                self.terminal_runtime_shutdowns
+                    .push((terminal_id, agent_grace));
             }
         }
     }

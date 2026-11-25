@@ -949,6 +949,7 @@ accentt = "#ffffff"
 
 [advanced]
 scrollback_lines = 42
+agent_shutdown_grace_ms = 3500
 
 [keys]
 fullscreen = "prefix+z"
@@ -990,6 +991,7 @@ claude = [["terminal_title"]]
         );
         assert!(loaded.invalid_sections.is_empty());
         assert_eq!(loaded.config.advanced.scrollback_limit_bytes, 42);
+        assert_eq!(loaded.config.advanced.agent_shutdown_grace_ms, 3500);
         assert!(!loaded.config.ui.mouse_capture);
         assert_eq!(
             loaded.config.ui.toast.delivery,

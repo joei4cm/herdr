@@ -1398,7 +1398,7 @@ pub(super) mod test_support {
     pub(crate) fn shutdown_test_runtimes(app: &mut crate::app::App) {
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 }
@@ -1918,7 +1918,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -2022,7 +2022,7 @@ mod tests {
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -2331,7 +2331,7 @@ mod tests {
         assert!(terminal.agent_name.is_none());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 

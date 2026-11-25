@@ -27,16 +27,23 @@ impl App {
             .retain_mut(|child| retain_detached_process_after_wait(child.id(), child.try_wait()));
     }
 
-    pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::terminal::TerminalId) {
+    pub(crate) fn shutdown_terminal_runtime(
+        &mut self,
+        terminal_id: crate::terminal::TerminalId,
+        agent_grace: Option<std::time::Duration>,
+    ) {
         if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
-            runtime.shutdown();
+            // A pane that ran a recognized agent gets the captured extra
+            // grace before SIGKILL so the agent can finish its shutdown
+            // hooks; everything else keeps the base signal timing (#6094).
+            runtime.shutdown(agent_grace);
         }
     }
 
     pub(crate) fn shutdown_detached_terminal_runtimes(&mut self) {
         let terminal_ids = std::mem::take(&mut self.state.terminal_runtime_shutdowns);
-        for terminal_id in terminal_ids {
-            self.shutdown_terminal_runtime(terminal_id);
+        for (terminal_id, agent_grace) in terminal_ids {
+            self.shutdown_terminal_runtime(terminal_id, agent_grace);
         }
     }
 

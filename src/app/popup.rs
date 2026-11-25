@@ -20,8 +20,10 @@ impl App {
         self.state
             .direct_attach_resize_locks
             .remove(&popup.terminal_id);
+        // Capture the agent grace before the terminal metadata leaves (#6094).
+        let agent_grace = self.state.agent_shutdown_grace_for(&popup.terminal_id);
         self.state.terminals.remove(&popup.terminal_id);
-        self.shutdown_terminal_runtime(popup.terminal_id);
+        self.shutdown_terminal_runtime(popup.terminal_id, agent_grace);
         self.state.mode = if self.state.active.is_some() {
             Mode::Terminal
         } else {

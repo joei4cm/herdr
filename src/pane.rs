@@ -1515,6 +1515,9 @@ pub struct PaneRuntime {
     self_reported_agent_active: Arc<AtomicBool>,
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
+    /// Most recently detected agent identity, mirrored from the detection
+    /// task so the Drop fallback can tell agent panes from plain shells.
+    detected_agent_for_shutdown: Arc<Mutex<Option<Agent>>>,
     preserve_processes_on_drop: bool,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
@@ -1713,8 +1716,21 @@ impl Drop for PaneRuntime {
                 self.pane_id,
                 self.child_pid.load(Ordering::Acquire),
                 self.child_wait_completed.as_deref(),
+                self.agent_shutdown_grace(),
             );
         }
+    }
+}
+
+impl PaneRuntime {
+    /// Grace for the post-SIGTERM wait when this pane holds a recognized
+    /// agent. Explicit `shutdown` receives the configured value from the app;
+    /// the Drop fallback has no config access and uses the default.
+    fn agent_shutdown_grace(&self) -> Option<std::time::Duration> {
+        let agent = self.detected_agent_for_shutdown.lock().ok()?;
+        agent.map(|_| {
+            std::time::Duration::from_millis(crate::config::DEFAULT_AGENT_SHUTDOWN_GRACE_MS)
+        })
     }
 }
 
@@ -1757,10 +1773,36 @@ fn wait_for_processes_to_exit(
     }
 }
 
+/// Base grace between shutdown signals. Long enough for shells and editors
+/// to exit on their own, short enough that closing a pane stays responsive.
+const PANE_SHUTDOWN_STEP_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Builds the (signal, grace) sequence used to stop a pane session. When the
+/// pane runs a recognized agent, the wait after SIGTERM is extended so the
+/// agent can finish its own shutdown hooks (for example Claude Code's
+/// SessionEnd) before SIGKILL arrives. SIGHUP already starts that graceful
+/// shutdown, and SIGTERM is handled gracefully as well; SIGKILL at the fixed
+/// 500 ms point was what cut the hooks short (#6094). The extra wait never
+/// applies to the SIGHUP step and never shortens the base grace.
+fn shutdown_signal_plan(
+    agent_grace: Option<std::time::Duration>,
+) -> [(crate::platform::Signal, std::time::Duration); 3] {
+    let terminate_grace = agent_grace
+        .filter(|grace| !grace.is_zero())
+        .map(|grace| grace.max(PANE_SHUTDOWN_STEP_GRACE))
+        .unwrap_or(PANE_SHUTDOWN_STEP_GRACE);
+    [
+        (crate::platform::Signal::Hangup, PANE_SHUTDOWN_STEP_GRACE),
+        (crate::platform::Signal::Terminate, terminate_grace),
+        (crate::platform::Signal::Kill, PANE_SHUTDOWN_STEP_GRACE),
+    ]
+}
+
 fn shutdown_pane_processes(
     pane_id: PaneId,
     child_pid: u32,
     child_wait_completed: Option<&AtomicBool>,
+    agent_grace: Option<std::time::Duration>,
 ) {
     if child_pid == 0 {
         return;
@@ -1773,20 +1815,7 @@ fn shutdown_pane_processes(
     pids.sort_unstable();
     pids.dedup();
 
-    for (signal, grace) in [
-        (
-            crate::platform::Signal::Hangup,
-            std::time::Duration::from_millis(250),
-        ),
-        (
-            crate::platform::Signal::Terminate,
-            std::time::Duration::from_millis(250),
-        ),
-        (
-            crate::platform::Signal::Kill,
-            std::time::Duration::from_millis(250),
-        ),
-    ] {
+    for (signal, grace) in shutdown_signal_plan(agent_grace) {
         crate::platform::signal_processes(&pids, signal);
         if wait_for_processes_to_exit(&pids, child_pid, child_wait_completed, grace) {
             info!(
@@ -2231,7 +2260,7 @@ fn publish_reported_cwd(
 }
 
 impl PaneRuntime {
-    pub fn shutdown(mut self) {
+    pub fn shutdown(mut self, agent_grace: Option<std::time::Duration>) {
         if let Some(handle) = self.detect_handle.take() {
             handle.abort();
         }
@@ -2241,6 +2270,7 @@ impl PaneRuntime {
             self.pane_id,
             self.child_pid.load(Ordering::Acquire),
             self.child_wait_completed.as_deref(),
+            agent_grace,
         );
         self.preserve_processes_on_drop = true;
     }
@@ -2676,6 +2706,7 @@ impl PaneRuntime {
             self_reported_agent_active,
             detect_reset_notify,
             pending_release,
+            detected_agent_for_shutdown: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(detect_handle),
@@ -2843,6 +2874,7 @@ impl PaneRuntime {
         };
 
         // --- Detection task ---
+        let detected_agent_for_shutdown = Arc::new(Mutex::new(initial_state.detected_agent));
         let (detect_handle, detect_reset_notify, pending_release) = if agent_detection
             == AgentDetection::Enabled
         {
@@ -2866,6 +2898,7 @@ impl PaneRuntime {
             let detect_reset = detect_reset_notify.clone();
             let pending_release = Arc::new(Mutex::new(None));
             let pending_release_for_task = pending_release.clone();
+            let detected_agent_for_shutdown_task = detected_agent_for_shutdown.clone();
 
             let handle = tokio::spawn(async move {
                 let mut agent_presence =
@@ -2949,6 +2982,9 @@ impl PaneRuntime {
                     release_was_active = suppressed_agent.is_some();
                     let pid = child_pid.load(Ordering::Acquire);
                     let mut agent = agent_presence.current_agent();
+                    if let Ok(mut mirrored) = detected_agent_for_shutdown_task.lock() {
+                        *mirrored = agent;
+                    }
                     let lifecycle_authority_active =
                         full_lifecycle_authority_active_for_task.load(Ordering::Acquire);
                     report_self_reported_agent_shell_return(
@@ -3290,6 +3326,7 @@ impl PaneRuntime {
             self_reported_agent_active,
             detect_reset_notify,
             pending_release,
+            detected_agent_for_shutdown,
             preserve_processes_on_drop: false,
             compression,
             detect_handle,
@@ -4084,6 +4121,7 @@ impl PaneRuntime {
                 self_reported_agent_active: Arc::new(AtomicBool::new(false)),
                 detect_reset_notify: Arc::new(Notify::new()),
                 pending_release: Arc::new(Mutex::new(None)),
+                detected_agent_for_shutdown: Arc::new(Mutex::new(None)),
                 preserve_processes_on_drop: true,
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -4229,7 +4267,7 @@ mod tests {
             runtime.test_wait_for_detection_reads(reads + 1).await;
         }
         assert_eq!(runtime.content_seq(), revision);
-        runtime.shutdown();
+        runtime.shutdown(None);
     }
 
     #[tokio::test]
@@ -4568,6 +4606,49 @@ mod tests {
     #[test]
     fn shutdown_liveness_treats_missing_process_as_gone() {
         assert!(!process_alive_for_shutdown(43, 42, false, |_| false));
+    }
+
+    #[test]
+    fn shutdown_signal_plan_extends_only_the_terminate_grace_for_agents() {
+        use crate::platform::Signal;
+        let plan = shutdown_signal_plan(Some(std::time::Duration::from_millis(2000)));
+        assert_eq!(
+            plan,
+            [
+                (Signal::Hangup, PANE_SHUTDOWN_STEP_GRACE),
+                (Signal::Terminate, std::time::Duration::from_millis(2000)),
+                (Signal::Kill, PANE_SHUTDOWN_STEP_GRACE),
+            ]
+        );
+    }
+
+    #[test]
+    fn shutdown_signal_plan_keeps_base_timing_without_an_agent() {
+        use crate::platform::Signal;
+        let plan = shutdown_signal_plan(None);
+        assert_eq!(
+            plan,
+            [
+                (Signal::Hangup, PANE_SHUTDOWN_STEP_GRACE),
+                (Signal::Terminate, PANE_SHUTDOWN_STEP_GRACE),
+                (Signal::Kill, PANE_SHUTDOWN_STEP_GRACE),
+            ]
+        );
+    }
+
+    #[test]
+    fn shutdown_signal_plan_never_shortens_the_base_grace() {
+        use crate::platform::Signal;
+        for grace in [
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(10),
+        ] {
+            let plan = shutdown_signal_plan(Some(grace));
+            assert_eq!(plan[0].1, PANE_SHUTDOWN_STEP_GRACE);
+            assert_eq!(plan[1].1, PANE_SHUTDOWN_STEP_GRACE);
+            assert_eq!(plan[2].1, PANE_SHUTDOWN_STEP_GRACE);
+            assert_eq!(plan[1].0, Signal::Terminate);
+        }
     }
 
     #[cfg(unix)]
@@ -5436,6 +5517,7 @@ mod tests {
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
+            detected_agent_for_shutdown: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -5476,6 +5558,7 @@ mod tests {
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
+            detected_agent_for_shutdown: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -6634,7 +6717,7 @@ mod tests {
         })
         .await
         .expect("pane process should write its env");
-        runtime.shutdown();
+        runtime.shutdown(None);
         let _ = std::fs::remove_dir_all(&output_dir);
 
         let expected = std::env::var(FISH_HANDLE_REFLOW_ENV_VAR).unwrap_or_else(|_| "0".into());
@@ -6678,7 +6761,7 @@ mod tests {
         .expect("PTY reader should publish terminal bells");
 
         assert_eq!(bell, (pane_id, 2));
-        runtime.shutdown();
+        runtime.shutdown(None);
     }
 
     #[tokio::test]

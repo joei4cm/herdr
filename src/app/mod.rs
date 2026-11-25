@@ -564,6 +564,9 @@ impl App {
             shell_mode: config.terminal.shell_mode,
             new_terminal_cwd: config.terminal.new_cwd.clone(),
             pane_scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
+            agent_shutdown_grace: std::time::Duration::from_millis(
+                config.advanced.agent_shutdown_grace_ms,
+            ),
             sound: config.ui.sound.clone(),
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
@@ -985,6 +988,8 @@ impl App {
 
         if !invalid_section("advanced") {
             self.state.pane_scrollback_limit_bytes = config.advanced.scrollback_limit_bytes;
+            self.state.agent_shutdown_grace =
+                std::time::Duration::from_millis(config.advanced.agent_shutdown_grace_ms);
         }
 
         if !invalid_section("update") {
@@ -2784,7 +2789,7 @@ mod tests {
 
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         match original_shell {
             Some(value) => std::env::set_var("SHELL", value),
@@ -2840,7 +2845,7 @@ mod tests {
 
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         match original_shell {
             Some(value) => std::env::set_var("SHELL", value),
@@ -2921,7 +2926,7 @@ mod tests {
         assert_eq!(size_of(&app, ws_idx, new_pane), spawned);
 
         for (_terminal_id, runtime) in app.terminal_runtimes.drain().collect::<Vec<_>>() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
     }
 
@@ -2964,7 +2969,7 @@ mod tests {
 
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         match original_shell {
             Some(value) => std::env::set_var("SHELL", value),

@@ -1785,7 +1785,7 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
         }
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         // PTY actor shutdown is queued, so its Windows handles can outlive `shutdown()`.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1871,7 +1871,7 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
             ));
             let pane_status = read_capture_when_ready(&plugin_root.join("pane-status"), || {});
             for (_, runtime) in app.terminal_runtimes.drain() {
-                runtime.shutdown();
+                runtime.shutdown(None);
             }
             assert_eq!(
                 (action_status.trim(), pane_status.trim()),
@@ -2024,7 +2024,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
         assert_eq!(lines.next(), Some("unset"));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2121,7 +2121,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2204,7 +2204,7 @@ command = ["sh", "-c", "sleep 1"]
         assert!(pane_created < layout_updated);
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2283,7 +2283,7 @@ command = ["sh", "-c", "sleep 1"]
         ));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2362,7 +2362,7 @@ command = ["sh", "-c", "sleep 1"]
         ));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2477,7 +2477,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
         assert!(event_hub.events_after(0).is_empty());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         let _ = std::fs::remove_dir_all(root);
     }

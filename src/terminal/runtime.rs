@@ -17,8 +17,8 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
-    pub fn shutdown(self) {
-        self.0.shutdown();
+    pub fn shutdown(self, agent_grace: Option<std::time::Duration>) {
+        self.0.shutdown(agent_grace);
     }
 
     #[cfg(unix)]

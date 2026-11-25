@@ -2158,7 +2158,7 @@ mod tests {
                 "screen history must belong to the exact saved layout"
             );
             for (_, runtime) in runtimes {
-                runtime.shutdown();
+                runtime.shutdown(None);
             }
         }
     }

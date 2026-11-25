@@ -58,7 +58,8 @@ impl App {
                 .entry(pane_id)
                 .or_default() += 1;
             shutdown_panes.push(pane_id);
-            self.shutdown_terminal_runtime(terminal_id);
+            let agent_grace = self.state.agent_shutdown_grace_for(&terminal_id);
+            self.shutdown_terminal_runtime(terminal_id, agent_grace);
         }
         shutdown_panes
     }

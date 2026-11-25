@@ -144,7 +144,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
 
 fn shutdown_test_runtimes(server: &mut HeadlessServer) {
     for (_, runtime) in server.app.terminal_runtimes.drain() {
-        runtime.shutdown();
+        runtime.shutdown(None);
     }
 }
 

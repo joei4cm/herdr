@@ -1157,7 +1157,7 @@ mod tests {
         assert_eq!(after.workspaces[0].identity_cwd, new);
         assert_eq!(runtimes.values().next().unwrap().cwd(), Some(old));
         for (_, runtime) in runtimes.drain() {
-            runtime.shutdown();
+            runtime.shutdown(None);
         }
         std::fs::remove_dir(new).unwrap();
     }

@@ -444,6 +444,10 @@ pane_history = false
 # Maximum scrollback buffer size in bytes retained per pane terminal.
 # Matches Ghostty's default scrollback-limit behavior.
 # scrollback_limit_bytes = 10000000
+# Extra grace period in milliseconds before SIGKILL when closing a pane that
+# runs a recognized agent, so the agent can finish its own shutdown hooks
+# (for example Claude Code's SessionEnd). 0 disables the extra wait.
+# agent_shutdown_grace_ms = 2000
 "##;
 
 // Bundled at build time so the printed skill always matches this binary's release.

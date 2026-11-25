@@ -960,6 +960,9 @@ pub struct AppState {
     pub shell_mode: crate::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
     pub pane_scrollback_limit_bytes: usize,
+    /// Extra grace before SIGKILL when closing a pane that runs a recognized
+    /// agent, from `advanced.agent_shutdown_grace_ms`. Zero disables it.
+    pub agent_shutdown_grace: std::time::Duration,
     pub sound: SoundConfig,
     pub toast_config: ToastConfig,
     pub keybinds: Keybinds,
@@ -995,11 +998,28 @@ pub struct AppState {
     /// Set when a persisted session snapshot would change.
     pub session_dirty: bool,
     /// Terminal runtimes that should be shut down by the app/runtime layer
-    /// after state has detached their terminal metadata.
-    pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
+    /// after state has detached their terminal metadata. The grace decision
+    /// travels with the entry because the terminal metadata is gone by the
+    /// time the runtime is shut down (#6094).
+    pub(crate) terminal_runtime_shutdowns:
+        Vec<(crate::terminal::TerminalId, Option<std::time::Duration>)>,
 }
 
 impl AppState {
+    /// Extra grace before SIGKILL when the terminal holds a recognized agent,
+    /// so the agent can finish its own shutdown hooks. Returns None for
+    /// non-agent panes and when the grace is disabled in config.
+    pub(crate) fn agent_shutdown_grace_for(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> Option<std::time::Duration> {
+        self.terminals
+            .get(terminal_id)
+            .and_then(|terminal| terminal.effective_known_agent())
+            .filter(|_| !self.agent_shutdown_grace.is_zero())
+            .map(|_| self.agent_shutdown_grace)
+    }
+
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
     }
@@ -1197,6 +1217,9 @@ impl AppState {
             shell_mode: crate::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,
             pane_scrollback_limit_bytes: crate::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,
+            agent_shutdown_grace: std::time::Duration::from_millis(
+                crate::config::DEFAULT_AGENT_SHUTDOWN_GRACE_MS,
+            ),
             sound: SoundConfig {
                 enabled: false,
                 ..SoundConfig::default()

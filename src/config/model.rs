@@ -5,8 +5,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
     ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_AGENT_SHUTDOWN_GRACE_MS,
+    DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -1054,6 +1054,11 @@ pub struct AdvancedConfig {
     /// Maximum scrollback buffer size in bytes retained per pane terminal. Default: 10000000.
     #[serde(alias = "scrollback_lines")]
     pub scrollback_limit_bytes: usize,
+    /// Extra grace period in milliseconds before SIGKILL when closing a pane
+    /// that runs a recognized agent, so the agent can finish its own shutdown
+    /// hooks (for example Claude Code's SessionEnd). 0 disables the extra
+    /// wait. Default: 2000.
+    pub agent_shutdown_grace_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1326,6 +1331,7 @@ impl Default for AdvancedConfig {
     fn default() -> Self {
         Self {
             scrollback_limit_bytes: DEFAULT_SCROLLBACK_LIMIT_BYTES,
+            agent_shutdown_grace_ms: DEFAULT_AGENT_SHUTDOWN_GRACE_MS,
         }
     }
 }
