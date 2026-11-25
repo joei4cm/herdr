@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=claude
-# HERDR_INTEGRATION_VERSION=11
+# HERDR_INTEGRATION_VERSION=12
 
 set -eu
 
@@ -13,7 +13,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  session) ;;
+  session|session_end) ;;
   *) exit 0 ;;
 esac
 
@@ -51,8 +51,12 @@ if hook_input_file:
 if "CURSOR_VERSION" in os.environ or "cursor_version" in hook_input:
     raise SystemExit(0)
 hook_event_name = str(hook_input.get("hook_event_name") or "")
-if hook_event_name != "SessionStart":
-    raise SystemExit(0)
+if action == "session_end":
+    if hook_event_name != "SessionEnd":
+        raise SystemExit(0)
+else:
+    if hook_event_name != "SessionStart":
+        raise SystemExit(0)
 is_subagent = bool(hook_input.get("agent_id"))
 if is_subagent:
     raise SystemExit(0)
@@ -60,12 +64,33 @@ request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):0
 report_seq = time.time_ns()
 session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
-transcript_path = hook_input.get("transcript_path")
-agent_session_path = transcript_path if isinstance(transcript_path, str) and transcript_path else None
-session_start_source = hook_input.get("source") if hook_event_name == "SessionStart" else None
-if not isinstance(session_start_source, str) or not session_start_source:
-    session_start_source = None
-if agent_session_id:
+if not agent_session_id:
+    raise SystemExit(0)
+
+if action == "session_end":
+    # A cleared session keeps the pane's session: Claude Code ends it and
+    # starts the replacement, so the next report rebinds the pane.
+    if str(hook_input.get("reason") or "") == "clear":
+        raise SystemExit(0)
+    # The release names the session it ends, so it only applies while the
+    # pane still holds that session.
+    request = {
+        "id": request_id,
+        "method": "pane.release_agent",
+        "params": {
+            "pane_id": pane_id,
+            "source": source,
+            "agent": "claude",
+            "seq": report_seq,
+            "agent_session_id": agent_session_id,
+        },
+    }
+else:
+    transcript_path = hook_input.get("transcript_path")
+    agent_session_path = transcript_path if isinstance(transcript_path, str) and transcript_path else None
+    session_start_source = hook_input.get("source")
+    if not isinstance(session_start_source, str) or not session_start_source:
+        session_start_source = None
     params = {
         "pane_id": pane_id,
         "source": source,
@@ -82,8 +107,6 @@ if agent_session_id:
         "method": "pane.report_agent_session",
         "params": params,
     }
-else:
-    raise SystemExit(0)
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -1604,14 +1604,29 @@ impl AppState {
                 pane_id,
                 source,
                 agent_label,
+                agent_session_id,
                 seq,
                 ..
             } => {
-                if crate::agent_resume::is_official_agent_source(&source, &agent_label) {
+                let session_ref = agent_session_id
+                    .as_deref()
+                    .and_then(crate::agent_resume::AgentSessionRef::id);
+                if session_ref.is_none()
+                    && crate::agent_resume::is_official_agent_source(&source, &agent_label)
+                {
+                    // Official agents are released when their process ends. A
+                    // release that names the session it ends is the agent
+                    // reporting that session itself, so it is applied even for
+                    // official sources.
                     Vec::new()
                 } else {
                     self.update_terminal_state(pane_id, |terminal| {
-                        terminal.release_agent_with_mutation(&source, &agent_label, seq)
+                        terminal.release_agent_with_mutation(
+                            &source,
+                            &agent_label,
+                            seq,
+                            session_ref.as_ref(),
+                        )
                     })
                     .into_iter()
                     .collect()
@@ -3702,6 +3717,7 @@ mod tests {
             agent_label: "prime-agent".into(),
             known_agent: None,
             seq: Some(2),
+            agent_session_id: None,
         });
         assert!(state.terminals[&terminal_id].reported_resume().is_none());
     }
@@ -4009,6 +4025,7 @@ mod tests {
             agent_label: "pi".into(),
             known_agent: Some(Agent::Pi),
             seq: Some(2),
+            agent_session_id: None,
         });
 
         assert!(updates.is_empty());
@@ -4018,6 +4035,51 @@ mod tests {
         assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
         assert!(terminal.full_lifecycle_hook_authority_active());
         assert!(!state.session_dirty);
+    }
+
+    #[test]
+    fn claude_session_end_releases_only_the_session_it_ends() {
+        let mut state = app_with_workspaces(&["active"]);
+        let (pane_id, terminal_id) = first_pane_terminal(&state);
+        {
+            let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:claude".into(),
+                agent: "claude".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id("live-session").unwrap(),
+            });
+        }
+
+        // A session end for another session leaves the pane's session alone.
+        state.handle_app_event(AppEvent::HookAgentReleased {
+            pane_id,
+            source: "herdr:claude".into(),
+            agent_label: "claude".into(),
+            known_agent: Some(Agent::Claude),
+            seq: Some(2),
+            agent_session_id: Some("ended-session".into()),
+        });
+        let terminal = &state.terminals[&terminal_id];
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("live-session")
+        );
+
+        // The session end of the session the pane holds releases it.
+        state.handle_app_event(AppEvent::HookAgentReleased {
+            pane_id,
+            source: "herdr:claude".into(),
+            agent_label: "claude".into(),
+            known_agent: Some(Agent::Claude),
+            seq: Some(3),
+            agent_session_id: Some("live-session".into()),
+        });
+        let terminal = &state.terminals[&terminal_id];
+        assert!(terminal.persisted_agent_session.is_none());
+        assert!(terminal.hook_authority.is_none());
     }
 
     #[test]
@@ -4117,6 +4179,7 @@ mod tests {
             agent_label: "custom-agent".into(),
             known_agent: None,
             seq: Some(2),
+            agent_session_id: None,
         });
 
         let terminal = &state.terminals[&terminal_id];

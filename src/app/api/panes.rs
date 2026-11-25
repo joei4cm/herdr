@@ -1904,6 +1904,7 @@ impl App {
             known_agent: crate::detect::parse_agent_label(&agent_label),
             agent_label,
             seq: params.seq,
+            agent_session_id: params.agent_session_id,
         });
 
         encode_success(id, ResponseResult::Ok {})

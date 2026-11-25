@@ -161,6 +161,8 @@ pub enum AppEvent {
         agent_label: String,
         known_agent: Option<Agent>,
         seq: Option<u64>,
+        /// Release only while the pane still holds this session.
+        agent_session_id: Option<String>,
     },
     /// A new version is available through the active installation manager.
     UpdateReady {

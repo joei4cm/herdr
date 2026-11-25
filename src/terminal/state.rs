@@ -1813,7 +1813,22 @@ impl TerminalState {
         source: &str,
         agent_label: &str,
         seq: Option<u64>,
+        session_ref: Option<&crate::agent_resume::AgentSessionRef>,
     ) -> Option<TerminalStateMutation> {
+        if let Some(session_ref) = session_ref {
+            // A release that names the session it ends only applies while the
+            // pane still holds that session. A session that already ended
+            // must not release the session that replaced it.
+            let holds_session = self.current_session_identity_for_persistence().is_some_and(
+                |(_, _, kind, value)| {
+                    kind == crate::agent_resume::AgentSessionRefKind::Id
+                        && value == session_ref.value
+                },
+            );
+            if !holds_session {
+                return None;
+            }
+        }
         if self.hook_authority.as_ref().is_some_and(|authority| {
             authority.agent_label != agent_label || authority.source != source
         }) {
@@ -4496,7 +4511,7 @@ mod tests {
         );
 
         assert!(terminal
-            .release_agent_with_mutation("custom:pi", "pi", Some(200))
+            .release_agent_with_mutation("custom:pi", "pi", Some(200), None)
             .is_none());
         assert!(terminal
             .clear_hook_authority_with_mutation(Some("custom:pi"), Some(201))
@@ -5949,7 +5964,7 @@ mod tests {
 
         terminal.set_agent_name("replacement".into());
         let mutation = terminal
-            .release_agent_with_mutation("herdr:codex", "codex", None)
+            .release_agent_with_mutation("herdr:codex", "codex", None, None)
             .expect("detected agent release should be accepted");
         assert!(!mutation.agent_released);
         assert_eq!(terminal.agent_name.as_deref(), Some("replacement"));
@@ -5971,7 +5986,7 @@ mod tests {
             .expect("custom state should be accepted");
 
         let mutation = terminal
-            .release_agent_with_mutation("custom:pi", "pi", Some(11))
+            .release_agent_with_mutation("custom:pi", "pi", Some(11), None)
             .expect("custom release should be accepted");
 
         assert!(!mutation.agent_released);
@@ -6092,7 +6107,7 @@ mod tests {
         });
 
         let mutation = terminal
-            .release_agent_with_mutation("herdr:hermes", "hermes", Some(21))
+            .release_agent_with_mutation("herdr:hermes", "hermes", Some(21), None)
             .expect("accepted release");
 
         assert!(mutation.session_ref_changed);
@@ -6111,7 +6126,7 @@ mod tests {
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
 
         let mutation = terminal
-            .release_agent_with_mutation("herdr:pi", "pi", Some(21))
+            .release_agent_with_mutation("herdr:pi", "pi", Some(21), None)
             .expect("visible agent release should be accepted");
 
         assert!(!mutation.session_ref_changed);
@@ -6123,6 +6138,38 @@ mod tests {
             )),
             Some(("herdr:claude", "claude", "claude-session"))
         );
+    }
+
+    #[test]
+    fn session_scoped_release_only_applies_to_the_session_it_ends() {
+        let mut terminal = test_terminal();
+        let live = crate::agent_resume::AgentSessionRef::id("live-session").unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: live.clone(),
+        });
+
+        // A session that already ended must not release the session that
+        // replaced it.
+        let ended = crate::agent_resume::AgentSessionRef::id("ended-session").unwrap();
+        assert!(terminal
+            .release_agent_with_mutation("herdr:claude", "claude", Some(21), Some(&ended))
+            .is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("live-session")
+        );
+
+        let mutation = terminal
+            .release_agent_with_mutation("herdr:claude", "claude", Some(22), Some(&live))
+            .expect("accepted release");
+
+        assert!(mutation.session_ref_changed);
+        assert!(terminal.persisted_agent_session.is_none());
     }
 
     #[test]

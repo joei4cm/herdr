@@ -2844,6 +2844,13 @@
             "agent": {
               "type": "string"
             },
+            "agent_session_id": {
+              "description": "Release only while the pane still holds this session. A session that\nalready ended must not release the session that replaced it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "pane_id": {
               "type": "string"
             },

@@ -492,6 +492,10 @@ crate::cli::projection::cli_params! {
         pub agent: String => Field::new(String::new()).input(binding::text("agent", "LABEL").required()),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub seq: Option<u64> => Field::new(None).input(binding::number("seq", "N")),
+        /// Release only while the pane still holds this session. A session that
+        /// already ended must not release the session that replaced it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub agent_session_id: Option<String> => Field::new(None).input(binding::optional_text("agent-session-id", "ID")),
     }
 }
 
