@@ -511,6 +511,89 @@ impl ClientShellState {
             .count()
     }
 
+    /// Cached snapshot of an endpoint that is not currently displayed.
+    fn endpoint_cached_snapshot(
+        &self,
+        endpoint_id: &ClientEndpointId,
+    ) -> Option<&ClientShellSnapshot> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+            .and_then(|endpoint| endpoint.snapshot.as_deref())
+    }
+
+    /// Pane surface size the client will have once `endpoint_id` is displayed with
+    /// `target` focused.
+    ///
+    /// An endpoint switch must not carry the outgoing endpoint's chrome into the
+    /// target's resize. With `hide_tab_bar_when_single_tab`, a one-tab outgoing
+    /// workspace hides the tab bar while a multi-tab target workspace shows it,
+    /// so panes sized for the outgoing chrome lose their bottom row (#6158).
+    pub(crate) fn surface_size_for_endpoint_focus(
+        &self,
+        endpoint_id: &ClientEndpointId,
+        target: Option<&ClientEndpointFocusTarget>,
+        cols: u16,
+        rows: u16,
+    ) -> crate::protocol::ClientSurfaceSize {
+        let tab_count = if endpoint_id == &self.active_endpoint_id {
+            self.focused_tab_count()
+        } else {
+            self.endpoint_focus_tab_count(endpoint_id, target)
+                .unwrap_or_else(|| self.focused_tab_count())
+        };
+        let surface = self
+            .config
+            .layout(
+                cols,
+                rows,
+                self.sidebar_collapsed,
+                tab_count,
+                self.sidebar_width,
+            )
+            .pane_surface;
+        crate::protocol::ClientSurfaceSize {
+            cols: surface.width.max(1),
+            rows: surface.height.max(1),
+        }
+    }
+
+    fn endpoint_focus_tab_count(
+        &self,
+        endpoint_id: &ClientEndpointId,
+        target: Option<&ClientEndpointFocusTarget>,
+    ) -> Option<usize> {
+        let snapshot = self.endpoint_cached_snapshot(endpoint_id)?;
+        let workspace_id = match target {
+            Some(ClientEndpointFocusTarget::Workspace(workspace_id)) => Some(workspace_id.clone()),
+            Some(ClientEndpointFocusTarget::Tab(tab_id)) => snapshot
+                .tabs
+                .iter()
+                .find(|tab| &tab.tab_id == tab_id)
+                .map(|tab| tab.workspace_id.clone()),
+            Some(ClientEndpointFocusTarget::Pane(pane_id)) => snapshot
+                .panes
+                .iter()
+                .find(|pane| &pane.pane_id == pane_id)
+                .map(|pane| pane.workspace_id.clone()),
+            #[cfg(windows)]
+            Some(ClientEndpointFocusTarget::Notification { pane_id, .. }) => snapshot
+                .panes
+                .iter()
+                .find(|pane| &pane.pane_id == pane_id)
+                .map(|pane| pane.workspace_id.clone()),
+            None => snapshot.focused_workspace_id.clone(),
+        }?;
+        let count = snapshot
+            .tabs
+            .iter()
+            .filter(|tab| tab.workspace_id == workspace_id)
+            .count();
+        // A workspace always keeps at least one tab, so a zero count means the
+        // cached snapshot does not know the focused workspace at all.
+        (count > 0).then_some(count)
+    }
+
     #[cfg(test)]
     pub(crate) fn cache_endpoint_snapshot(
         &mut self,

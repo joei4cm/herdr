@@ -3020,3 +3020,111 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }
+
+#[test]
+fn endpoint_focus_surface_size_uses_the_target_workspace_chrome() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.hide_tab_bar_when_single_tab = true;
+    let mut state = ClientShellState::new(config);
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    // Local displays a one-tab workspace, so its own chrome hides the tab bar.
+    assert_eq!(state.surface_size(100, 30).rows, 30);
+
+    // The remote endpoint has a two-tab workspace focused, plus a one-tab one.
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.focused_workspace_id = Some("ws_remote".into());
+    remote.workspaces[0].workspace_id = "ws_remote".into();
+    remote.workspaces[0].label = "remote-two-tabs".into();
+    remote.tabs[0].workspace_id = "ws_remote".into();
+    remote.panes[0].workspace_id = "ws_remote".into();
+    remote.tabs.push(ClientShellTab {
+        tab_id: "tab_remote_2".into(),
+        workspace_id: "ws_remote".into(),
+        number: 2,
+        label: "2".into(),
+        custom_label: false,
+        zoomed: false,
+        focused: false,
+        agent_status: crate::api::schema::AgentStatus::Idle,
+    });
+    remote.workspaces.push(ClientShellWorkspace {
+        workspace_id: "ws_remote_single".into(),
+        active_tab_id: "tab_remote_single".into(),
+        new_workspace_cwd: "/remote".into(),
+        number: 2,
+        label: "remote-one-tab".into(),
+        custom_label: false,
+        branch: None,
+        git_ahead_behind: None,
+        tokens: Vec::new(),
+        worktree: None,
+        focused: false,
+        agent_status: crate::api::schema::AgentStatus::Idle,
+    });
+    remote.tabs.push(ClientShellTab {
+        tab_id: "tab_remote_single".into(),
+        workspace_id: "ws_remote_single".into(),
+        number: 3,
+        label: "1".into(),
+        custom_label: false,
+        zoomed: false,
+        focused: false,
+        agent_status: crate::api::schema::AgentStatus::Idle,
+    });
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    // Switching to the two-tab workspace must size the target's panes for the
+    // tab bar the client will show, not for the outgoing one-tab chrome (#6158).
+    for target in [
+        Some(ClientEndpointFocusTarget::Workspace("ws_remote".into())),
+        Some(ClientEndpointFocusTarget::Tab("tab_remote_2".into())),
+        Some(ClientEndpointFocusTarget::Pane("pane_1".into())),
+        None,
+    ] {
+        let size = state.surface_size_for_endpoint_focus(&endpoint_id, target.as_ref(), 100, 30);
+        assert_eq!(size.rows, 29, "target {target:?} must reserve the tab bar");
+    }
+
+    // A one-tab target workspace keeps the tab bar hidden and matches the
+    // outgoing geometry, and unknown ids fall back to the displayed chrome.
+    assert_eq!(
+        state
+            .surface_size_for_endpoint_focus(
+                &endpoint_id,
+                Some(&ClientEndpointFocusTarget::Workspace(
+                    "ws_remote_single".into()
+                )),
+                100,
+                30,
+            )
+            .rows,
+        30
+    );
+    assert_eq!(
+        state
+            .surface_size_for_endpoint_focus(
+                &endpoint_id,
+                Some(&ClientEndpointFocusTarget::Workspace("missing".into())),
+                100,
+                30,
+            )
+            .rows,
+        30
+    );
+
+    // The displayed endpoint keeps using its own chrome.
+    let local = ClientEndpointId::Local;
+    assert_eq!(
+        state
+            .surface_size_for_endpoint_focus(&local, None, 100, 30)
+            .rows,
+        30
+    );
+}

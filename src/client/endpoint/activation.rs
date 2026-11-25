@@ -200,7 +200,7 @@ impl PendingEndpointActivation {
         &self.target.endpoint_id
     }
 
-    fn geometry(&self) -> crate::protocol::ClientSurfaceSize {
+    pub(crate) fn geometry(&self) -> crate::protocol::ClientSurfaceSize {
         resize_geometry(&self.resize).expect("activation resize was validated before construction")
     }
 

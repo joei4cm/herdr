@@ -99,6 +99,27 @@ pub(super) fn client_shell_resize_message(
     }
 }
 
+/// Resize for an endpoint that is about to become the displayed one. The
+/// geometry must match the chrome the client will show with `target` focused,
+/// not the chrome of the endpoint being replaced (#6158).
+pub(super) fn client_shell_resize_message_for_focus(
+    shell: &shell::ClientShellState,
+    endpoint_id: &endpoint::ClientEndpointId,
+    target: Option<&shell::ClientEndpointFocusTarget>,
+    cols: u16,
+    rows: u16,
+    cell_width_px: u32,
+    cell_height_px: u32,
+    pixel_mouse: bool,
+) -> ClientMessage {
+    ClientMessage::ClientShellResize {
+        cell_width_px,
+        cell_height_px,
+        surface_size: shell.surface_size_for_endpoint_focus(endpoint_id, target, cols, rows),
+        pixel_mouse,
+    }
+}
+
 pub(super) fn sync_client_shell_keyboard_report_all(
     state: &mut ClientState,
 ) -> Result<(), ClientError> {
@@ -306,8 +327,10 @@ pub(super) fn begin_endpoint_activation(
     let Some(shell) = state.shell.as_ref() else {
         return Ok(());
     };
-    let resize = client_shell_resize_message(
+    let resize = client_shell_resize_message_for_focus(
         shell,
+        &endpoint_id,
+        target.as_ref(),
         state.reported_size.0,
         state.reported_size.1,
         state.reported_cell_size.0,
@@ -378,6 +401,35 @@ pub(super) fn begin_endpoint_activation(
     Ok(())
 }
 
+/// Re-assert the client's displayed chrome on the endpoint an activation just
+/// settled on. The activation resize only predicts the target chrome; a missing
+/// cached snapshot leaves the endpoint holding the outgoing workspace's
+/// geometry while the client already shows different chrome, so the visible
+/// pane rows drift until the next window resize (#6158).
+pub(super) fn correct_endpoint_chrome_after_activation(
+    state: &ClientState,
+    endpoints: &mut endpoint::EndpointRegistry,
+    server_geometry: crate::protocol::ClientSurfaceSize,
+) {
+    let Some(shell) = state.shell.as_ref() else {
+        return;
+    };
+    let displayed = shell.surface_size(state.reported_size.0, state.reported_size.1);
+    if displayed == server_geometry {
+        return;
+    }
+    let resize = client_shell_resize_message(
+        shell,
+        state.reported_size.0,
+        state.reported_size.1,
+        state.reported_cell_size.0,
+        state.reported_cell_size.1,
+        state.pixel_mouse_available(),
+    );
+    let active_endpoint = endpoints.active_id().clone();
+    endpoints.send_to(&active_endpoint, &resize);
+}
+
 pub(super) fn complete_endpoint_activation(
     state: &mut ClientState,
     endpoints: &mut endpoint::EndpointRegistry,
@@ -431,6 +483,9 @@ pub(super) fn complete_endpoint_activation(
         return Ok(None);
     }
 
+    let server_geometry = pending
+        .as_ref()
+        .map(endpoint::PendingEndpointActivation::geometry);
     let _ = pending.take();
     endpoints.unfreeze_input();
     let successor = match completion {
@@ -450,6 +505,15 @@ pub(super) fn complete_endpoint_activation(
         endpoint::ActivationCompletion::AwaitingPresentationSync { .. }
         | endpoint::ActivationCompletion::AwaitingPresentationEffects => unreachable!(),
     };
+    // The activation resize is only a prediction of the target chrome. When the
+    // endpoint had no usable cached snapshot yet, or its workspace layout moved
+    // under the prediction, the switched-to endpoint keeps the outgoing
+    // workspace's geometry while the client already shows different chrome, so
+    // the visible pane rows drift (#6158). Re-assert the displayed chrome once
+    // the switch settles.
+    if let Some(server_geometry) = server_geometry {
+        correct_endpoint_chrome_after_activation(state, endpoints, server_geometry);
+    }
     state.unfreeze_presentation();
     if successor.is_none() {
         let active_endpoint = endpoints.active_id().clone();
@@ -968,6 +1032,254 @@ mod tests {
                     color: crate::protocol::ClientHostColor { r: 4, g: 5, b: 6 },
                 },
             }
+        );
+    }
+    fn focus_chrome_snapshot(
+        boot_id: &str,
+        workspace_id: &str,
+        tab_ids: &[&str],
+    ) -> crate::protocol::ClientShellSnapshot {
+        let tabs = tab_ids
+            .iter()
+            .enumerate()
+            .map(|(index, tab_id)| crate::protocol::ClientShellTab {
+                tab_id: (*tab_id).into(),
+                workspace_id: workspace_id.into(),
+                number: index + 1,
+                label: (index + 1).to_string(),
+                custom_label: false,
+                zoomed: false,
+                focused: index == 0,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+            })
+            .collect::<Vec<_>>();
+        crate::protocol::ClientShellSnapshot {
+            boot_id: boot_id.into(),
+            revision: 1,
+            config_diagnostic: None,
+            product_announcement: None,
+            update_available: None,
+            update_install_command: "herdr update".into(),
+            server_keybindings_toml: None,
+            latest_release_notes_available: false,
+            integration_updates_available: false,
+            worktree_directory: "/remote".into(),
+            release_notes: None,
+            focused_workspace_id: Some(workspace_id.into()),
+            focused_tab_id: tabs.first().map(|tab| tab.tab_id.clone()),
+            focused_pane_id: Some("pane_remote_1".into()),
+            tab_bar_right: Vec::new(),
+            tab_bar_right_separator: " ".into(),
+            agent_view_label: None,
+            agent_order: Vec::new(),
+            workspaces: vec![crate::protocol::ClientShellWorkspace {
+                workspace_id: workspace_id.into(),
+                active_tab_id: tabs[0].tab_id.clone(),
+                new_workspace_cwd: "/remote".into(),
+                number: 1,
+                label: workspace_id.into(),
+                custom_label: false,
+                branch: None,
+                git_ahead_behind: None,
+                tokens: Vec::new(),
+                worktree: None,
+                focused: true,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+            }],
+            tabs,
+            panes: vec![crate::protocol::ClientShellPane {
+                pane_id: "pane_remote_1".into(),
+                workspace_id: workspace_id.into(),
+                tab_id: tab_ids[0].into(),
+                label: None,
+                cwd: Some("/remote".into()),
+                foreground_cwd: Some("/remote".into()),
+                focused: true,
+                right_click_passthrough: false,
+            }],
+            agents: Vec::new(),
+            commands: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn endpoint_activation_resize_carries_the_target_workspace_chrome() {
+        #[derive(Clone)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<ClientMessage>>>);
+        impl endpoint::EndpointTransport for Capture {
+            fn send(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+                self.0.lock().unwrap().push(message.clone());
+                Ok(())
+            }
+        }
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let negotiation = endpoint::EndpointNegotiation::new(
+            vec!["client_shell.surface.set".into()],
+            vec![
+                crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into(),
+                crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
+            ],
+        );
+        let mut endpoints =
+            endpoint::EndpointRegistry::new(Capture(sent.clone()), 1, negotiation.clone());
+        let mut source = crate::config::Config::default();
+        source.ui.hide_tab_bar_when_single_tab = true;
+        let config = shell::ClientShellConfig::from_config(&source);
+        let mut state = ClientState::test_new();
+        state.shell = Some(shell::ClientShellState::new(config));
+        let profile = endpoint::SavedSshEndpoint {
+            id: endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+            label: "Build".into(),
+            target: "dev@build.example".into(),
+            session: "agents".into(),
+            enabled: true,
+        };
+        let endpoint_id = endpoint::ClientEndpointId::Ssh(profile.id.clone());
+        {
+            let shell = state.shell.as_mut().unwrap();
+            shell.set_endpoint_catalog(&[profile]);
+            shell.set_endpoint_status(&endpoint_id, endpoint::ClientEndpointStatus::Online);
+            shell.set_snapshot(Box::new(focus_chrome_snapshot(
+                "local-boot",
+                "ws_local",
+                &["tab_local_1"],
+            )));
+        }
+        // Local displays a one-tab workspace: no tab bar, full-height surface.
+        assert_eq!(state.shell.as_ref().unwrap().surface_size(100, 30).rows, 30);
+
+        let remote = focus_chrome_snapshot(
+            "remote-boot",
+            "ws_remote",
+            &["tab_remote_1", "tab_remote_2"],
+        );
+        state
+            .shell
+            .as_mut()
+            .unwrap()
+            .set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+        endpoints.insert(
+            endpoint_id.clone(),
+            Capture(sent.clone()),
+            7,
+            negotiation,
+            false,
+        );
+
+        // Start from an inactive local surface so the handoff goes straight to
+        // the target activation write that carries the resize.
+        endpoints.set_surface_active(&endpoint::ClientEndpointId::Local, false);
+        let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
+        let mut pending = None;
+        let mut serial = 1;
+        let mut scheduled = None;
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut endpoint_commands,
+            &mut pending,
+            &mut serial,
+            endpoint_id.clone(),
+            Some(shell::ClientEndpointFocusTarget::Workspace(
+                "ws_remote".into(),
+            )),
+            false,
+            std::time::Instant::now(),
+            &mut scheduled,
+        )
+        .unwrap();
+        assert!(
+            pending.is_some(),
+            "activation must begin against an online endpoint"
+        );
+
+        let messages = sent.lock().unwrap();
+        let resize = messages
+            .iter()
+            .filter_map(|message| match message {
+                ClientMessage::ClientShellResize { surface_size, .. } => Some(*surface_size),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            resize.iter().any(|size| size.rows == 29),
+            "activation resize must reserve the target's tab bar, saw {resize:?}"
+        );
+        assert!(
+            !resize.iter().any(|size| size.rows == 30),
+            "activation resize must not carry the outgoing one-tab chrome, saw {resize:?}"
+        );
+    }
+
+    #[test]
+    fn chrome_correction_only_resizes_when_the_server_geometry_is_stale() {
+        #[derive(Clone)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<ClientMessage>>>);
+        impl endpoint::EndpointTransport for Capture {
+            fn send(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+                self.0.lock().unwrap().push(message.clone());
+                Ok(())
+            }
+        }
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut endpoints = endpoint::EndpointRegistry::new(
+            Capture(sent.clone()),
+            1,
+            endpoint::EndpointNegotiation::new(Vec::new(), Vec::new()),
+        );
+        let mut source = crate::config::Config::default();
+        source.ui.hide_tab_bar_when_single_tab = true;
+        let config = shell::ClientShellConfig::from_config(&source);
+        let mut state = ClientState::test_new();
+        state.shell = Some(shell::ClientShellState::new(config));
+        state
+            .shell
+            .as_mut()
+            .unwrap()
+            .set_snapshot(Box::new(focus_chrome_snapshot(
+                "local-boot",
+                "ws_local",
+                &["tab_local_1"],
+            )));
+        // Local displays a one-tab workspace: displayed chrome is 100x30.
+        assert_eq!(state.shell.as_ref().unwrap().surface_size(100, 30).rows, 30);
+
+        let displayed = state.shell.as_ref().unwrap().surface_size(100, 30);
+
+        // Matching geometry never emits a resize.
+        correct_endpoint_chrome_after_activation(
+            &state,
+            &mut endpoints,
+            crate::protocol::ClientSurfaceSize {
+                cols: displayed.cols,
+                rows: 30,
+            },
+        );
+        assert!(sent.lock().unwrap().is_empty());
+
+        // Stale geometry from the outgoing chrome is re-asserted.
+        correct_endpoint_chrome_after_activation(
+            &state,
+            &mut endpoints,
+            crate::protocol::ClientSurfaceSize {
+                cols: displayed.cols,
+                rows: 29,
+            },
+        );
+        let messages = sent.lock().unwrap();
+        let resize = messages
+            .iter()
+            .filter_map(|message| match message {
+                ClientMessage::ClientShellResize { surface_size, .. } => Some(*surface_size),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resize,
+            vec![displayed],
+            "correction must send the displayed chrome"
         );
     }
 }
