@@ -146,6 +146,17 @@ not = [
   { contains = ["tab/arrow keys"] },
   { contains = ["arrow keys to navigate"] },
   { contains = ["↑/↓ to navigate"] },
+  # A permission question renders inside the named-session prompt box, so its
+  # option cursor would otherwise read as the idle prompt (#6063). Gate on
+  # the question shape, not on the phrase alone, so typed text that happens
+  # to contain it stays idle.
+  { all = [
+    { contains = ["do you want to"] },
+    { any = [
+      { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
+      { line_regex = ['(?i)^\s*❯?\s*yes\b'] },
+    ] },
+  ] },
 ]
 
 [[rules]]
