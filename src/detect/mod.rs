@@ -119,6 +119,14 @@ impl Agent {
         Self::Maki,
         Self::Muse,
     ];
+
+    /// True when the agent silently discards a prompt submitted while it is
+    /// working. Codex renders the submitted text into the transcript and drops
+    /// it, so `agent prompt` must refuse rather than report success (#6080).
+    /// Agents that queue mid-turn submissions (Claude, OpenCode) return false.
+    pub fn drops_prompt_while_working(self) -> bool {
+        matches!(self, Agent::Codex)
+    }
 }
 
 pub fn agent_label(agent: Agent) -> &'static str {
