@@ -661,6 +661,29 @@ fn screen_regions_extract_structure_without_classifying_agent_state() {
             "after_last_horizontal_rule",
             "footer\n",
         ),
+        // A session name truncated into the top border still bounds the box:
+        // the row ends in `… ─` and spans the full width of the rule below.
+        (
+            "above\n Refactor the payment re… ─\n❯ body\n───────────────────────────\nfooter\n",
+            "prompt_box_body",
+            "❯ body\n",
+        ),
+        (
+            "above\n Refactor the payment re… ─\n❯ body\n───────────────────────────\nfooter\n",
+            "above_prompt_box",
+            "above\n",
+        ),
+        (
+            "above\n Refactor the payment re… ─\n❯ body\n───────────────────────────\nfooter\n",
+            "last_non_empty_above_prompt_box",
+            "above",
+        ),
+        // A shorter `… ─` row is ordinary output, not the box border.
+        (
+            "above\n Refactor… ─\n❯ body\n───────────────────────────\nfooter\n",
+            "prompt_box_body",
+            "",
+        ),
     ] {
         assert_eq!(
             region(

@@ -1495,7 +1495,23 @@ fn prompt_box_top_border_index(lines: &[&str]) -> Option<usize> {
             }
         }
     }
-    None
+    truncated_prompt_box_top_border_index(lines)
+}
+
+/// A session name that does not fit the pane is truncated into the top
+/// border, so the row starts with the name and ends in `… ─` instead of
+/// leading with dashes. The row still spans the full width of the plain
+/// rule below the prompt.
+fn truncated_prompt_box_top_border_index(lines: &[&str]) -> Option<usize> {
+    let bottom = lines.iter().rposition(|line| is_horizontal_rule(line))?;
+    let width = lines[bottom].chars().count();
+    (0..bottom)
+        .rev()
+        .find(|&index| truncated_prompt_box_border(lines[index], width))
+}
+
+fn truncated_prompt_box_border(line: &str, width: usize) -> bool {
+    line.ends_with("… ─") && line.chars().count() == width
 }
 
 fn is_horizontal_rule(line: &str) -> bool {
