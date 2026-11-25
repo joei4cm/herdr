@@ -1,0 +1,74 @@
+use super::*;
+use base64::Engine as _;
+
+/// A valid zlib stream for a single RGBA pixel.
+const VALID_ZLIB: &[u8] = &[
+    0x78, 0x9c, 0x63, 0x64, 0x62, 0x66, 0x01, 0x00, 0x00, 0x18, 0x00, 0x0b,
+];
+
+/// A zlib stream for a 32x24 RGBA image whose tail was removed. Decoding this
+/// used to walk past the end of the compressed buffer and take the whole
+/// server down with it.
+const TRUNCATED_ZLIB: &[u8] = &[
+    0x78, 0x01, 0xed, 0x95, 0x41, 0x0a, 0x80, 0x30, 0x0c, 0x04, 0xbf, 0x21, 0xde, 0xfc, 0xab, 0x67,
+    0x1f, 0xe2, 0xd9, 0x6f, 0x78, 0xf6, 0x39, 0x4a, 0x94, 0x81, 0x75, 0xf1, 0xd8, 0x54, 0x85, 0x1e,
+    0xca, 0x26, 0x2d, 0x64, 0xb6, 0x69, 0x69, 0xbb, 0x7e, 0xd8, 0xbb, 0x36, 0x7e, 0xd9, 0x83, 0x79,
+    0x5e, 0x76, 0x46, 0x9c, 0xe1, 0x38, 0x4e, 0xb7, 0x91, 0x79, 0xae, 0x70, 0x51, 0xe5, 0x7b, 0x9c,
+    0xe1, 0x03, 0x6e, 0xa8, 0xd7, 0x8f, 0x3e, 0xe0, 0xc1, 0xd7, 0x4a, 0xe5, 0xf0, 0x9f, 0xea, 0xd5,
+    0xe0, 0x07, 0x97, 0xbd, 0xa3, 0xca, 0xe5, 0x2e, 0x3c, 0xf9, 0x2b, 0x35, 0x47, 0x0f, 0xe0, 0x7b,
+    0x5d, 0xfc, 0xf8, 0x7c, 0x89, 0x1c, 0x26, 0xea, 0x35, 0x33, 0xd9, 0xce, 0x6a, 0x79, 0xfb, 0x43,
+    0xbe, 0x70, 0x07, 0xd6, 0x75, 0x3b, 0xdf, 0x3d, 0x34, 0x3c, 0x69, 0x9c, 0xed, 0x11, 0x96, 0x6a,
+    0xc4, 0xe4, 0x35, 0xf9, 0x70, 0x55, 0xb3, 0xf9, 0x5e, 0x5f, 0xd9, 0x6f, 0xf7, 0xc0, 0xbd, 0x65,
+    0xe4, 0xec, 0xd7, 0x6b, 0xd7, 0xda, 0xbb, 0x72, 0xf1, 0xa2, 0xaa, 0xeb, 0x2d,
+];
+
+fn kitty_upload(payload: &[u8], width: u32, height: u32, image_id: u32) -> String {
+    format!(
+        "\x1b_Ga=T,f=32,o=z,s={width},v={height},i={image_id};{}\x1b\\",
+        base64::engine::general_purpose::STANDARD.encode(payload)
+    )
+}
+
+fn terminal() -> Terminal {
+    let mut terminal = Terminal::new(20, 10, 0).unwrap();
+    terminal.enable_kitty_graphics().unwrap();
+    terminal.resize(20, 10, 8, 16).unwrap();
+    terminal
+}
+
+#[test]
+fn zlib_compressed_kitty_images_still_decode() {
+    let mut terminal = terminal();
+    terminal.write(kitty_upload(VALID_ZLIB, 1, 1, 7).as_bytes());
+    let placements = terminal.kitty_image_placements().unwrap();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].format, KittyImageFormat::Rgba);
+    assert_eq!(placements[0].data, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn truncated_zlib_kitty_images_are_rejected_without_crashing() {
+    let mut terminal = terminal();
+    terminal.write(kitty_upload(TRUNCATED_ZLIB, 32, 24, 7).as_bytes());
+    assert!(terminal.kitty_image_placements().unwrap().is_empty());
+
+    // The damaged upload must not leave the terminal in a state where later
+    // uploads are swallowed.
+    terminal.write(kitty_upload(VALID_ZLIB, 1, 1, 8).as_bytes());
+    let placements = terminal.kitty_image_placements().unwrap();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].data, vec![1, 2, 3, 4]);
+}
+
+/// The vendored Kitty decoder must not decode zlib payloads with Zig's flate
+/// reader: that reader consumes bits past the end of a truncated payload and
+/// reads uninitialized heap memory while doing so.
+#[test]
+fn vendored_kitty_graphics_avoids_the_unbounded_zlib_reader() {
+    let source =
+        include_str!("../../../vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig");
+    assert!(
+        !source.contains("std.compress.flate"),
+        "kitty graphics must not decode zlib payloads with std.compress.flate"
+    );
+}

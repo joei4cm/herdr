@@ -272,3 +272,53 @@ verification:
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
 just maintenance-test
 ```
+
+## 0009 decode kitty zlib payloads with the wuffs decoder
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0009-kitty-zlib-wuffs-decoder.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/6166
+
+upstream discussion: not opened
+
+upstream pr: not opened; backports upstream commits
+4b86e3594cda498c1f973d8466d33eeef526429b ("terminal/kitty: use wuffs for
+zlib image decompression") and
+42049f1c4483f799178267ea0ba11e4b4fe63886 ("pkg/wuffs: align zlib decoder
+storage")
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/pkg/wuffs/src/main.zig`
+- `vendor/libghostty-vt/pkg/wuffs/src/zlib.zig`
+- `vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig`
+
+reason: Kitty graphics payloads compressed with zlib (`o=z`) were inflated
+with Zig's `std.compress.flate` reader. That reader does not check that the
+bits it is asked for are still buffered when it peeks at the end of a
+truncated payload, so it consumes bytes past the end of the input and leaves
+its seek position behind the buffer. The following read then computes the
+remaining length as an unsigned wraparound and reads uninitialized heap
+memory beyond the compressed data. Any pane that sent a damaged `o=z` image
+could therefore take the whole server down with SIGBUS or SIGSEGV, instead of
+getting the EINVAL answer a damaged PNG already gets. The Wuffs zlib decoder
+rejects the same payload with a bounded error, and the vendored tree already
+ships the Wuffs C library with its zlib module enabled.
+
+Upstream's Zig test and its PNG fixture are not part of this backport: the
+local patch 0007 changed `LoadingImage.init`, so the upstream test does not
+apply as written. Herdr covers the behavior with Rust tests instead.
+
+remove when: the vendored source decodes Kitty zlib payloads with the Wuffs
+decoder and no longer uses `std.compress.flate` for them.
+
+verification:
+
+```sh
+just test-one kitty_zlib
+just maintenance-test
+```

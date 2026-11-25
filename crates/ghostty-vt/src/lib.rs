@@ -709,6 +709,8 @@ thread_local! {
 }
 
 #[cfg(test)]
+mod kitty_zlib_tests;
+#[cfg(test)]
 mod native_source_tests;
 #[cfg(test)]
 mod png_forward_tests;
