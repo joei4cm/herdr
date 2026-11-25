@@ -87,5 +87,22 @@ class HermesIntegrationAssetTests(unittest.TestCase):
 
         self.assertEqual(calls, [("resumed", "resume")])
 
+    def test_single_query_sessions_are_never_reported(self):
+        module = load_asset()
+        calls = []
+        module._send_session = lambda session_id, start_source: calls.append(
+            (session_id, start_source)
+        )
+        context = FakeContext()
+        module.register(context)
+
+        environment = {"HERMES_SINGLE_QUERY_SESSION": "1"}
+        with mock.patch.dict(module.os.environ, environment, clear=True):
+            context.hooks["on_session_start"](session_id="one-shot", platform="cli")
+            context.hooks["on_session_reset"](session_id="one-shot", platform="cli")
+            context.hooks["pre_llm_call"](session_id="one-shot", platform="cli")
+
+        self.assertEqual(calls, [])
+
 if __name__ == "__main__":
     unittest.main()

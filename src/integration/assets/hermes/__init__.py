@@ -1,7 +1,7 @@
 """Hermes plugin installed by Herdr to report resumable session identity."""
 
 # HERDR_INTEGRATION_ID=hermes
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 
 from __future__ import annotations
 
@@ -50,6 +50,10 @@ def _send_session(session_id: str, start_source: str) -> None:
 
 
 def _report_session(start_source: str, **kwargs) -> None:
+    # One-shot runs (hermes -z, chat --oneshot) mark themselves; their
+    # throwaway session must not replace the pane's resumable session.
+    if os.environ.get("HERMES_SINGLE_QUERY_SESSION") == "1":
+        return
     if kwargs.get("platform") not in _INTERACTIVE_PLATFORMS:
         return
     session_id = kwargs.get("session_id")
