@@ -3867,10 +3867,14 @@ impl PaneRuntime {
         {
             let pid = self.child_pid.load(Ordering::Acquire);
             let shell_cwd = absolute_process_cwd(pid);
-            let foreground_pgid = self
-                .io
-                .foreground_process_group_id()
-                .or_else(|| crate::platform::foreground_process_group_id(pid));
+            // Ask the kernel directly first (/proc tpgid on Linux, proc_pidinfo
+            // on macOS): both read the same tty foreground group the actor's
+            // tcgetpgrp would return, without a control-message round trip that
+            // can block the calling thread for up to a second per pane when
+            // actor threads are starved (issue #6122). The actor query remains
+            // as the fallback for shells whose controlling tty is not this PTY.
+            let foreground_pgid = crate::platform::foreground_process_group_id(pid)
+                .or_else(|| self.io.foreground_process_group_id());
             let leader_cwd = foreground_pgid.and_then(absolute_process_cwd);
 
             // The group leader's cwd is authoritative (issue #3270): a helper
@@ -4548,6 +4552,52 @@ mod tests {
         *runtime.reported_cwd.lock().unwrap() = Some(cwd.clone());
 
         assert_eq!(runtime.follow_cwd(), Some(cwd));
+    }
+
+    /// Characterization for the foreground-cwd lookup order (issue #6122):
+    /// the direct platform query and the PTY master fd query must return the
+    /// same foreground process group for a live pane shell, so consulting the
+    /// platform first never changes the result, only avoids the actor
+    /// round trip.
+    #[cfg(unix)]
+    #[test]
+    fn foreground_process_group_sources_agree_on_a_live_pty() {
+        struct ChildGuard(Box<dyn portable_pty::Child + Send + Sync>);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let pair = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open pty");
+        let command = portable_pty::CommandBuilder::new("sh");
+        let child = ChildGuard(pair.slave.spawn_command(command).expect("spawn shell"));
+        let shell_pid = child.0.process_id().expect("shell pid");
+        let master_fd = pair.master.as_raw_fd().expect("master fd");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let (via_platform, via_master_fd) = loop {
+            let via_platform = crate::platform::foreground_process_group_id(shell_pid);
+            let via_master_fd =
+                crate::platform::foreground_process_group_id_for_tty_fd(master_fd);
+            if let (Some(via_platform), Some(via_master_fd)) = (via_platform, via_master_fd) {
+                break (via_platform, via_master_fd);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "foreground process group never became visible: platform={via_platform:?} master_fd={via_master_fd:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(via_platform, via_master_fd);
     }
 
     #[test]
