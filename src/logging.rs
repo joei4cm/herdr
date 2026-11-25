@@ -213,6 +213,21 @@ pub(crate) fn pane_exit_failed(pane_id: u32, err: &str) {
     );
 }
 
+/// The agent process running inside a pane's shell ended, as confirmed by the
+/// foreground process probe. The shell itself keeps running, so `pane.exit`
+/// never fires for this; without this record a restored agent that dies
+/// seconds after launch leaves nothing to grep (#6192).
+pub(crate) fn agent_process_exited(pane_id: u32, agent: &str) {
+    tracing::warn!(
+        event = "agent.process_exit",
+        subsystem = "pane",
+        outcome = "exited",
+        pane_id,
+        agent,
+        "agent process exited"
+    );
+}
+
 pub(crate) fn workspace_created(workspace_id: &str, root_pane_id: u32) {
     tracing::info!(
         event = "workspace.create",

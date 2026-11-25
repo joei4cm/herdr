@@ -1476,6 +1476,18 @@ impl AppState {
                 observed_at,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
+                    // The agent process died inside the pane's shell, so the
+                    // shell's pane.exit record never fires. Log it here, where
+                    // the probe-confirmed exit lands, so a restored agent that
+                    // dies seconds after launch leaves a record (#6192).
+                    if process_exited {
+                        if let Some(agent) = agent {
+                            crate::logging::agent_process_exited(
+                                pane_id.raw(),
+                                crate::detect::agent_label(agent),
+                            );
+                        }
+                    }
                     Some(terminal.set_detected_state_with_screen_signals_at(
                         agent,
                         state,
@@ -3449,6 +3461,31 @@ mod tests {
             .pop()
             .expect("process exit update");
         assert!(!exit_update.suppress_completion);
+    }
+
+    /// An agent that dies inside the pane's shell never produces a pane.exit
+    /// record, so the probe-confirmed exit itself has to be logged (#6192).
+    #[test]
+    fn agent_process_exit_is_logged_without_a_pane_exit() {
+        let mut state = app_with_workspaces(&["restore"]);
+        let pane_id = state.workspaces[0].panes.keys().next().copied().unwrap();
+        let _ = state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Codex),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: true,
+            observed_at: Instant::now(),
+        });
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        assert!(
+            state.terminals[&terminal_id]
+                .agent_process_exited_within(Instant::now(), std::time::Duration::from_secs(5)),
+            "the exit must still be recorded on the terminal"
+        );
     }
 
     #[test]

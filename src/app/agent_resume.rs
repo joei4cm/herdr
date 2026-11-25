@@ -295,7 +295,7 @@ impl App {
             }
         };
 
-        let mut input = resume_command;
+        let mut input = resume_command.clone();
         input.push('\r');
         if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
             tracing::warn!(
@@ -314,6 +314,18 @@ impl App {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
         }
+        // The command is typed into the restored shell, so neither pane.spawned
+        // nor pane.exit can name it. Record it so a later agent.process_exit
+        // can be matched back to the restore attempt (#6192).
+        tracing::info!(
+            event = "agent.resume",
+            subsystem = "pane",
+            outcome = "started",
+            pane_id = pane_id.raw(),
+            agent = %plan.agent,
+            command = %resume_command,
+            "agent resume command sent to restored shell"
+        );
         true
     }
 }
