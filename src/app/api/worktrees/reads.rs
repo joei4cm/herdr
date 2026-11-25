@@ -35,8 +35,9 @@ impl SourceInput {
             };
             WorktreeSource {
                 workspace_idx: None,
-                source_checkout_path,
+                source_checkout_path: source_checkout_path.clone(),
                 source_repo_root: membership.repo_root,
+                base_checkout_path: source_checkout_path,
                 repo_key: membership.key,
                 repo_name: membership.label,
             }
@@ -240,8 +241,9 @@ impl App {
             Ok(data) => {
                 let mut source = WorktreeSource {
                     workspace_idx: None,
-                    source_checkout_path: data.source_checkout_path,
+                    source_checkout_path: data.source_checkout_path.clone(),
                     source_repo_root: data.source_repo_root,
+                    base_checkout_path: data.source_checkout_path,
                     repo_key: data.repo_key,
                     repo_name: data.repo_name,
                 };
@@ -310,13 +312,14 @@ fn worktree_source_from_space(
     WorktreeSource {
         workspace_idx: None,
         source_checkout_path: source_checkout_path.clone(),
-        source_repo_root: source_checkout_path,
+        source_repo_root: source_checkout_path.clone(),
+        base_checkout_path: source_checkout_path,
         repo_key: space.key,
         repo_name: space.repo_name,
     }
 }
 
-fn parent_checkout_path_for_space(
+pub(super) fn parent_checkout_path_for_space(
     space: &crate::workspace::GitSpaceMetadata,
     trust_repository: bool,
 ) -> PathBuf {

@@ -18,6 +18,9 @@ pub struct ApiWorktreeAddRequest {
     pub source_existing_membership: Option<crate::workspace::WorktreeSpaceMembership>,
     pub source_checkout_path: std::path::PathBuf,
     pub source_repo_root: std::path::PathBuf,
+    /// Checkout `git worktree add` runs in; for a linked-worktree source this is
+    /// the linked checkout so a `HEAD` base resolves to that worktree (#6069).
+    pub base_checkout_path: std::path::PathBuf,
     pub repo_key: String,
     pub repo_name: String,
     pub label: Option<String>,

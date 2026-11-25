@@ -60,7 +60,9 @@ impl App {
         };
         let workspace = &self.state.workspaces[ws_idx];
         if let Some(expected) = api.source_existing_membership.as_ref() {
-            if workspace.worktree_space() == Some(expected) {
+            // A linked-worktree source is resolved to the repo parent here; the
+            // captured membership is linked, so it can never name the parent.
+            if !expected.is_linked_worktree && workspace.worktree_space() == Some(expected) {
                 return Some(ws_idx);
             }
             return self.find_parent_workspace_by_key(&api.repo_key);
@@ -122,7 +124,11 @@ impl App {
             return;
         }
         let base = params.base.unwrap_or_else(|| "HEAD".into());
-        let source = match self.resolve_worktree_source(params.workspace_id, params.cwd) {
+        let source = match self.resolve_worktree_source(
+            params.workspace_id,
+            params.cwd,
+            params.trust_repository,
+        ) {
             Ok(source) => source,
             Err(err) => {
                 Self::send_api_response(respond_to, encode_error(id, err.code, err.message));
@@ -184,13 +190,14 @@ impl App {
             source_existing_membership,
             source_checkout_path: source.source_checkout_path,
             source_repo_root: source.source_repo_root,
+            base_checkout_path: source.base_checkout_path,
             repo_key: source.repo_key,
             repo_name: source.repo_name,
             label: params.label,
             focus: params.focus,
             respond_to,
         };
-        let source_checkout_path = api_request.source_checkout_path.clone();
+        let base_checkout_path = api_request.base_checkout_path.clone();
         let event_tx = self.event_tx.clone();
         let finished = crate::events::WorktreeAddResult {
             path: checkout_path,
@@ -208,7 +215,7 @@ impl App {
                 }
                 .and_then(|()| {
                     crate::worktree::run_worktree_add_command(
-                        &source_checkout_path,
+                        &base_checkout_path,
                         &finished.path,
                         &branch,
                         &base,
@@ -442,6 +449,7 @@ impl App {
             workspace_idx: source_workspace_idx,
             source_checkout_path: api.source_checkout_path,
             source_repo_root: api.source_repo_root,
+            base_checkout_path: api.base_checkout_path,
             repo_key: api.repo_key,
             repo_name: api.repo_name,
         };
