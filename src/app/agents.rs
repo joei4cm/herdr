@@ -129,7 +129,7 @@ impl App {
         }
         match normalized_name {
             Some(name) => terminal.set_agent_name(name),
-            None => terminal.clear_agent_name(),
+            None => terminal.clear_agent_display_name(),
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();

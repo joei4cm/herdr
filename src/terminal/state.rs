@@ -2319,9 +2319,16 @@ impl TerminalState {
         {
             self.persisted_agent_session = None;
         }
+        self.clear_agent_display_name();
+        self.managed_agent = None;
+    }
+
+    /// Clearing a display alias must not tear down the managed agent that
+    /// still owns the pane; `agent rename --clear` uses this instead of the
+    /// full teardown in `clear_agent_name` (issue #6129).
+    pub fn clear_agent_display_name(&mut self) {
         self.agent_name = None;
         self.agent_name_owner = None;
-        self.managed_agent = None;
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
@@ -2522,6 +2529,37 @@ mod tests {
         assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
         assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), true));
         assert_eq!(terminal.agent_name, None);
+    }
+
+    #[test]
+    fn clearing_display_name_keeps_a_live_managed_agent_interactive_ready() {
+        // Replays herdrdev/herdr#6129: `agent rename --clear` on a running
+        // managed agent must remove only the display alias. Tearing the
+        // managed agent down makes `interactive_ready` false even though the
+        // agent still owns the pane.
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.begin_managed_agent(
+            "reviewer".into(),
+            Agent::Pi,
+            now,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        );
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Unknown);
+        terminal.reconcile_managed_agent_at(now + Duration::from_millis(100), false);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Blocked);
+        terminal.reconcile_managed_agent_at(now + Duration::from_millis(102), false);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_millis(103), false);
+        assert!(terminal.managed_agent_interactive_ready());
+
+        terminal.clear_agent_display_name();
+
+        assert_eq!(terminal.agent_name, None);
+        assert_eq!(terminal.agent_name_owner, None);
+        assert!(terminal.managed_agent_interactive_ready());
+        assert!(terminal.managed_agent_kind().is_some());
     }
 
     #[test]
