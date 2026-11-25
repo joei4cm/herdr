@@ -629,6 +629,11 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn is_fish_process_name(name: &str) -> bool {
+    normalized_process_name(name) == "fish"
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn interactive_unix_shell_command(
     argv: &[String],
     shell_name: &str,
@@ -636,6 +641,8 @@ pub(crate) fn interactive_unix_shell_command(
 ) -> Option<String> {
     let quote = if is_powershell_process_name(shell_name) {
         quote_powershell_arg
+    } else if is_fish_process_name(shell_name) {
+        quote_fish_arg
     } else {
         quote_posix_arg
     };
@@ -659,6 +666,28 @@ pub(crate) fn quote_powershell_arg(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "''"))
+}
+
+/// Quotes one argument for typing into a fish prompt.
+///
+/// Fish single quotes accept exactly two backslash escapes, `\'` and `\\`, so
+/// the POSIX close-quote idiom `'\''` does not end the string there and the
+/// remainder of the argument runs as fish commands (#6138).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn quote_fish_arg(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'-' | b'.' | b'/' | b':' | b'+' | b'=' | b'@' | b'%'
+                )
+        })
+    {
+        return value.to_string();
+    }
+    let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
 }
 
 pub(crate) fn quote_windows_command_line_arg(value: &str) -> String {
@@ -980,6 +1009,42 @@ mod tests {
         assert_eq!(
             interactive_shell_command(&argv, "pwsh").as_deref(),
             Some("pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'")
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn interactive_shell_command_quotes_fish_with_fish_escapes() {
+        // The POSIX close-quote idiom would let the tail run as fish commands (#6138).
+        let canary = "x'; touch canary; echo ";
+        assert_eq!(
+            interactive_shell_command(&["claude".into(), canary.into()], "fish").as_deref(),
+            Some(r"claude 'x\'; touch canary; echo '")
+        );
+        assert_eq!(
+            interactive_shell_command(&["claude".into(), canary.into()], "/bin/fish").as_deref(),
+            Some(r"claude 'x\'; touch canary; echo '")
+        );
+
+        let argv = vec![
+            "pi".into(),
+            String::new(),
+            "two words".into(),
+            "a'b".into(),
+            "$HOME".into(),
+            "semi;colon".into(),
+            "@options".into(),
+            "back\\slash'quote".into(),
+        ];
+        assert_eq!(
+            interactive_shell_command(&argv, "fish").as_deref(),
+            Some(r"pi '' 'two words' 'a\'b' '$HOME' 'semi;colon' @options 'back\\slash\'quote'")
+        );
+
+        // Other shells keep the POSIX idiom.
+        assert_eq!(
+            interactive_shell_command(&["echo".into(), "a'b".into()], "bash").as_deref(),
+            Some(r"echo 'a'\''b'")
         );
     }
 
