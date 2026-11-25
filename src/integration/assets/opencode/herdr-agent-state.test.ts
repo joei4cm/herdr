@@ -164,6 +164,40 @@ test("reports retry status as working", async () => {
   expect(requests.map(requestSessionID)).toEqual(["root-session"]);
 });
 
+test("reports tool execution hooks as working and guards child sessions", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin["tool.execute.before"](
+    { tool: "bash", sessionID: "root-session", callID: "call-1" },
+    { args: {} },
+  );
+  await plugin["tool.execute.after"](
+    { tool: "bash", sessionID: "root-session", callID: "call-1", args: {} },
+    { title: "", output: "", metadata: {} },
+  );
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin["tool.execute.before"](
+    { tool: "bash", sessionID: "child-session", callID: "call-2" },
+    { args: {} },
+  );
+  await plugin["tool.execute.after"](
+    { tool: "bash", sessionID: "child-session", callID: "call-2", args: {} },
+    { title: "", output: "", metadata: {} },
+  );
+
+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent", "pane.report_agent"]);
+  expect(requests.map(requestState)).toEqual(["working", "working"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+});
+
 test("reports child prompts without replacing the root session", async () => {
   const plugin = await loadPlugin();
 

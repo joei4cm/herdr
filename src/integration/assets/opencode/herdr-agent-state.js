@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=13
+// HERDR_INTEGRATION_VERSION=14
 
 import net from "node:net";
 
@@ -142,13 +142,20 @@ export const HerdrAgentStatePlugin = async () => {
     return {};
   }
 
+  // chat.message and the tool execution hooks all mean the agent is working.
+  // tool.execute.before/after arrive as separate Hooks fields, never as bus
+  // events, so they cannot live in the event switch below.
+  const reportWorking = async ({ sessionID }) => {
+    if (sessionID && childSessions.has(sessionID)) {
+      return;
+    }
+    await reportState("working", sessionID);
+  };
+
   return {
-    "chat.message": async ({ sessionID }) => {
-      if (sessionID && childSessions.has(sessionID)) {
-        return;
-      }
-      await reportState("working", sessionID);
-    },
+    "chat.message": reportWorking,
+    "tool.execute.before": reportWorking,
+    "tool.execute.after": reportWorking,
     event: async ({ event }) => {
       const type = event?.type;
       const properties = event?.properties ?? {};
@@ -190,8 +197,6 @@ export const HerdrAgentStatePlugin = async () => {
           }
           break;
         }
-        case "tool.execute.before":
-        case "tool.execute.after":
         case "permission.replied":
         case "question.replied":
         case "question.rejected":
