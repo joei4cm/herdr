@@ -3848,9 +3848,11 @@ impl PaneRuntime {
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {
-            let leader_cwd = self
-                .io
-                .foreground_process_group_id()
+            // Same lookup order as foreground_cwd: the direct platform query
+            // first (no actor round trip), the actor query as the fallback.
+            let pid = self.child_pid.load(Ordering::Acquire);
+            let leader_cwd = crate::platform::foreground_process_group_id(pid)
+                .or_else(|| self.io.foreground_process_group_id())
                 .and_then(usable_process_cwd);
             leader_cwd.or_else(|| self.cwd())
         }
