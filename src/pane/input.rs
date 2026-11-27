@@ -78,6 +78,9 @@ pub(super) fn ghostty_key_event_from_terminal_key(
                 event.set_utf8(&text);
             }
         }
+        KeyCode::Enter if key.is_keypad_enter() => {
+            event.set_key(crate::ghostty::ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER);
+        }
         KeyCode::BackTab => {
             // Ghostty represents backtab as Tab with Shift rather than a distinct key.
             mods |= crate::ghostty::MOD_SHIFT;
@@ -109,6 +112,10 @@ pub(super) fn configure_key_encoder(
 pub(super) fn legacy_shell_key(key: crate::input::TerminalKey) -> crate::input::TerminalKey {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+    // Keypad Enter has its own legacy encoding and must retain its identity.
+    if key.is_keypad_enter() {
+        return key;
+    }
     let alt = key.modifiers & KeyModifiers::ALT;
     let chord = key.modifiers - KeyModifiers::ALT;
     let classic = match (key.code, chord) {

@@ -1172,6 +1172,15 @@ impl ClientShellState {
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
+        if self.active_endpoint_supports_keypad_enter_input() {
+            if let Some(keypad_enter) =
+                crate::protocol::endpoint::EndpointKeypadEnterKey::from_terminal_key(&key)
+            {
+                if super::push_target_keypad_enter(target.clone(), keypad_enter, outcome) {
+                    return;
+                }
+            }
+        }
         if let Some(event) = ClientPaneInputEvent::from_terminal_key(key) {
             super::push_target_event(target, event, outcome);
         }

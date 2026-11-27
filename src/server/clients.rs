@@ -34,6 +34,7 @@ pub(crate) enum ClientShellInputTarget {
 enum ClientShellPressId {
     PhysicalKey(u32),
     SemanticKey(ClientKeyCode),
+    KeypadEnter,
     Mouse(ClientMouseButton),
 }
 
@@ -47,10 +48,23 @@ fn client_shell_key_press_id(
     )
 }
 
+fn client_shell_keypad_enter_press_id(physical_key_id: Option<u32>) -> ClientShellPressId {
+    physical_key_id.map_or(
+        ClientShellPressId::KeypadEnter,
+        ClientShellPressId::PhysicalKey,
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ClientShellHeldRelease {
+    PaneInput(ClientPaneInputEvent),
+    KeypadEnter(crate::protocol::endpoint::EndpointKeypadEnterKey),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClientShellHeldInput {
     pub(crate) target: ClientShellInputTarget,
-    pub(crate) release: ClientPaneInputEvent,
+    pub(crate) release: ClientShellHeldRelease,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -288,7 +302,7 @@ impl ClientConnection {
                         client_shell_key_press_id(code, *physical_key_id),
                         ClientShellHeldInput {
                             target: target.clone(),
-                            release: ClientPaneInputEvent::Key {
+                            release: ClientShellHeldRelease::PaneInput(ClientPaneInputEvent::Key {
                                 code: code.clone(),
                                 modifiers: *modifiers,
                                 kind: ClientKeyKind::Release,
@@ -298,7 +312,7 @@ impl ClientConnection {
                                 tracks_release: true,
                                 physical_key_id: *physical_key_id,
                                 windows_record: *windows_record,
-                            },
+                            }),
                         },
                     );
                 }
@@ -338,13 +352,15 @@ impl ClientConnection {
                             id,
                             ClientShellHeldInput {
                                 target: target.clone(),
-                                release: ClientPaneInputEvent::Mouse {
-                                    kind: ClientMouseKind::Up(*button),
-                                    position: *position,
-                                    geometry: *geometry,
-                                    modifiers: *modifiers,
-                                    lines: 1,
-                                },
+                                release: ClientShellHeldRelease::PaneInput(
+                                    ClientPaneInputEvent::Mouse {
+                                        kind: ClientMouseKind::Up(*button),
+                                        position: *position,
+                                        geometry: *geometry,
+                                        modifiers: *modifiers,
+                                        lines: 1,
+                                    },
+                                ),
                             },
                         );
                     }
@@ -363,6 +379,33 @@ impl ClientConnection {
                 | ClientPaneInputEvent::TextCommit(_)
                 | ClientPaneInputEvent::Mouse { .. }
                 | ClientPaneInputEvent::Paste(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn track_shell_keypad_enter_input(
+        &mut self,
+        target: ClientShellInputTarget,
+        events: &[crate::protocol::endpoint::EndpointKeypadEnterKey],
+    ) {
+        for event in events {
+            match event.kind {
+                ClientKeyKind::Press if event.tracks_release => {
+                    self.shell_held_inputs.insert(
+                        client_shell_keypad_enter_press_id(event.physical_key_id),
+                        ClientShellHeldInput {
+                            target: target.clone(),
+                            release: ClientShellHeldRelease::KeypadEnter(
+                                event.clone().into_release(),
+                            ),
+                        },
+                    );
+                }
+                ClientKeyKind::Release => {
+                    self.shell_held_inputs
+                        .remove(&client_shell_keypad_enter_press_id(event.physical_key_id));
+                }
+                ClientKeyKind::Press | ClientKeyKind::Repeat => {}
             }
         }
     }
@@ -599,13 +642,74 @@ mod tests {
         assert_eq!(held.len(), 1);
         assert!(matches!(
             &held[0].release,
-            ClientPaneInputEvent::Key {
+            ClientShellHeldRelease::PaneInput(ClientPaneInputEvent::Key {
                 code: crate::protocol::ClientKeyCode::Enter,
                 kind: ClientKeyKind::Release,
                 physical_key_id: Some(108),
                 windows_record: Some(record),
                 ..
-            } if *record == windows_record
+            }) if *record == windows_record
+        ));
+    }
+
+    #[test]
+    fn main_enter_and_keypad_enter_keep_distinct_server_release_leases() {
+        let mut client = shell_client();
+        let target = ClientShellInputTarget::Pane("w1:p1".into());
+        // Hold both main Enter and keypad Enter simultaneously without physical IDs (VT/Kitty).
+        client.track_shell_input(
+            target.clone(),
+            &[ClientPaneInputEvent::Key {
+                code: crate::protocol::ClientKeyCode::Enter,
+                modifiers: 0,
+                kind: ClientKeyKind::Press,
+                repeat_count: 1,
+                shifted_codepoint: None,
+                generated_text: None,
+                tracks_release: true,
+                physical_key_id: None,
+                windows_record: None,
+            }],
+        );
+        client.track_shell_keypad_enter_input(
+            target.clone(),
+            &[crate::protocol::endpoint::EndpointKeypadEnterKey {
+                modifiers: 0,
+                kind: ClientKeyKind::Press,
+                repeat_count: 1,
+                tracks_release: true,
+                physical_key_id: None,
+                windows_record: None,
+            }],
+        );
+
+        // Releasing main Enter must leave keypad Enter held.
+        client.track_shell_input(
+            target,
+            &[ClientPaneInputEvent::Key {
+                code: crate::protocol::ClientKeyCode::Enter,
+                modifiers: 0,
+                kind: ClientKeyKind::Release,
+                repeat_count: 1,
+                shifted_codepoint: None,
+                generated_text: None,
+                tracks_release: true,
+                physical_key_id: None,
+                windows_record: None,
+            }],
+        );
+
+        let held = client.drain_shell_held_inputs();
+        assert_eq!(held.len(), 1);
+        assert!(matches!(
+            &held[0].release,
+            ClientShellHeldRelease::KeypadEnter(
+                crate::protocol::endpoint::EndpointKeypadEnterKey {
+                    kind: ClientKeyKind::Release,
+                    physical_key_id: None,
+                    ..
+                }
+            )
         ));
     }
 }

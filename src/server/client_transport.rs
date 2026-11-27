@@ -648,6 +648,12 @@ pub(crate) enum ServerEvent {
         terminal_id: String,
         events: Vec<ClientPaneInputEvent>,
     },
+    /// A client-owned shell delivered negotiated keypad Enter input to one target.
+    ClientShellKeypadEnterInput {
+        client_id: u64,
+        target: crate::protocol::endpoint::EndpointInputTarget,
+        events: Vec<crate::protocol::endpoint::EndpointKeypadEnterKey>,
+    },
     /// A client-owned shell published one host terminal theme observation.
     ClientShellHostTheme {
         client_id: u64,
@@ -748,6 +754,16 @@ fn pane_input_event_limit(events: &[ClientPaneInputEvent]) -> InputEventLimit {
     }
 
     classify_input_event_size(expanded_events, paste_bytes, input_bytes)
+}
+
+fn keypad_enter_input_event_limit(
+    events: &[crate::protocol::endpoint::EndpointKeypadEnterKey],
+) -> InputEventLimit {
+    let mut expanded_events = 0usize;
+    for event in events {
+        expanded_events = expanded_events.saturating_add(usize::from(event.repeat_count.max(1)));
+    }
+    classify_input_event_size(expanded_events, 0, 0)
 }
 
 fn classify_input_event_size(
@@ -1489,6 +1505,63 @@ fn client_read_loop_with_endpoint_controls(
                 ServerEvent::ClientShellPresentationSync {
                     client_id,
                     token: data,
+                }
+            }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND =>
+            {
+                if data.len() > MAX_INPUT_PAYLOAD {
+                    warn!(
+                        client_id,
+                        size = data.len(),
+                        max = MAX_INPUT_PAYLOAD,
+                        "oversized keypad enter input control, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                let payload = match crate::protocol::endpoint::decode_keypad_enter_input(&data) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        warn!(
+                            client_id,
+                            %error,
+                            "invalid keypad enter input control, closing"
+                        );
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
+                };
+                match keypad_enter_input_event_limit(&payload.events) {
+                    InputEventLimit::WithinLimits => ServerEvent::ClientShellKeypadEnterInput {
+                        client_id,
+                        target: payload.target,
+                        events: payload.events,
+                    },
+                    InputEventLimit::TooManyEvents => {
+                        warn!(
+                            client_id,
+                            count = payload.events.len(),
+                            "oversized keypad enter input batch, closing"
+                        );
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
+                    InputEventLimit::PasteTooLarge { size }
+                    | InputEventLimit::InputPayloadTooLarge { size } => {
+                        warn!(
+                            client_id,
+                            size,
+                            max = MAX_INPUT_PAYLOAD,
+                            "oversized keypad enter input payload, closing"
+                        );
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
                 }
             }
             ClientMessage::EndpointControl { kind, data } => {
@@ -2855,6 +2928,115 @@ mod tests {
             pane_input_event_limit(&[oversized_scroll]),
             InputEventLimit::TooManyEvents
         );
+    }
+
+    #[test]
+    fn client_read_loop_accepts_and_limits_keypad_enter_control() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-keypad-enter-ok");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        let payload = crate::protocol::endpoint::EndpointKeypadEnterInput {
+            target: crate::protocol::endpoint::EndpointInputTarget::Pane("w1:p1".into()),
+            events: vec![
+                crate::protocol::endpoint::EndpointKeypadEnterKey {
+                    modifiers: 0,
+                    kind: crate::protocol::ClientKeyKind::Press,
+                    repeat_count: 1,
+                    tracks_release: true,
+                    physical_key_id: None,
+                    windows_record: None,
+                },
+                crate::protocol::endpoint::EndpointKeypadEnterKey {
+                    modifiers: 0,
+                    kind: crate::protocol::ClientKeyKind::Release,
+                    repeat_count: 1,
+                    tracks_release: true,
+                    physical_key_id: None,
+                    windows_record: None,
+                },
+            ],
+        };
+        let msg = crate::protocol::endpoint::keypad_enter_input_message(&payload).unwrap();
+        protocol::write_message(&mut client_stream, &msg).unwrap();
+
+        match recv_server_event(&mut server_event_rx, "keypad enter event") {
+            ServerEvent::ClientShellKeypadEnterInput {
+                client_id,
+                target,
+                events,
+            } => {
+                assert_eq!(client_id, 7);
+                assert_eq!(target, payload.target);
+                assert_eq!(events, payload.events);
+            }
+            other => panic!("expected ClientShellKeypadEnterInput, got {other:?}"),
+        }
+
+        // Now send an oversized repeat batch (> MAX_INPUT_EVENT_BATCH) — must disconnect.
+        let oversized = crate::protocol::endpoint::EndpointKeypadEnterInput {
+            target: crate::protocol::endpoint::EndpointInputTarget::Pane("w1:p1".into()),
+            events: vec![crate::protocol::endpoint::EndpointKeypadEnterKey {
+                modifiers: 0,
+                kind: crate::protocol::ClientKeyKind::Press,
+                repeat_count: (MAX_INPUT_EVENT_BATCH + 1) as u16,
+                tracks_release: true,
+                physical_key_id: None,
+                windows_record: None,
+            }],
+        };
+        let oversized_msg =
+            crate::protocol::endpoint::keypad_enter_input_message(&oversized).unwrap();
+        protocol::write_message(&mut client_stream, &oversized_msg).unwrap();
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "oversized keypad enter disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_disconnects_on_malformed_or_oversized_keypad_enter_control() {
+        for (name, data) in [
+            ("malformed", "{not-json".to_owned()),
+            ("oversized-bytes", "x".repeat(MAX_INPUT_PAYLOAD + 1)),
+        ] {
+            let (mut client_stream, server_stream, _path) =
+                local_stream_pair(&format!("client-read-keypad-enter-{name}"));
+            let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+            let should_quit = Arc::new(AtomicBool::new(false));
+            let read_quit = should_quit.clone();
+            let handle = std::thread::spawn(move || {
+                client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+            });
+
+            protocol::write_message(
+                &mut client_stream,
+                &ClientMessage::EndpointControl {
+                    kind: crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND.into(),
+                    data,
+                },
+            )
+            .unwrap();
+
+            assert!(matches!(
+                recv_server_event(&mut server_event_rx, "bad keypad enter disconnect"),
+                ServerEvent::ClientDisconnected { client_id: 7 }
+            ));
+            handle
+                .join()
+                .expect("read thread join")
+                .expect("read thread result");
+        }
     }
 
     #[test]

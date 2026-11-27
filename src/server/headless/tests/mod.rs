@@ -6522,6 +6522,100 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
     shutdown_test_runtimes(&mut server);
 }
 
+#[tokio::test]
+async fn client_shell_keypad_enter_input_delivers_and_releases_on_disconnect_independently() {
+    let mut server = test_headless_server();
+    // Enable Kitty disambiguate + event types + report-all-keys so both main Enter and keypad
+    // Enter emit distinct press and release sequences.
+    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[>11u");
+    let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
+    server.clients.insert(
+        1,
+        ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            1,
+            RenderEncoding::SemanticFrame,
+            None,
+        ),
+    );
+
+    // Hold both main Enter and keypad Enter simultaneously.
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellPaneInput {
+            client_id: 1,
+            pane_id: pane_id.clone(),
+            events: vec![crate::protocol::ClientPaneInputEvent::Key {
+                code: crate::protocol::ClientKeyCode::Enter,
+                modifiers: 0,
+                kind: crate::protocol::ClientKeyKind::Press,
+                repeat_count: 1,
+                shifted_codepoint: None,
+                generated_text: None,
+                tracks_release: true,
+                physical_key_id: None,
+                windows_record: None,
+            }],
+        })
+    );
+    assert_eq!(
+        input_rx.recv().await.expect("main enter press"),
+        &b"\x1b[13u"[..]
+    );
+
+    // Client 1 is already foreground after the first press, so handle_server_event returns false
+    // unless foreground/geometry/scroll changed; the press must still be delivered and tracked.
+    server.handle_server_event(ServerEvent::ClientShellKeypadEnterInput {
+        client_id: 1,
+        target: crate::protocol::endpoint::EndpointInputTarget::Pane(pane_id.clone()),
+        events: vec![crate::protocol::endpoint::EndpointKeypadEnterKey {
+            modifiers: 0,
+            kind: crate::protocol::ClientKeyKind::Press,
+            repeat_count: 1,
+            tracks_release: true,
+            physical_key_id: None,
+            windows_record: None,
+        }],
+    });
+    assert_eq!(
+        input_rx.recv().await.expect("keypad enter press"),
+        &b"\x1b[57414u"[..]
+    );
+
+    // Release main Enter explicitly; keypad Enter remains held.
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 1,
+        pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Enter,
+            modifiers: 0,
+            kind: crate::protocol::ClientKeyKind::Release,
+            repeat_count: 1,
+            shifted_codepoint: None,
+            generated_text: None,
+            tracks_release: true,
+            physical_key_id: None,
+            windows_record: None,
+        }],
+    });
+    assert_eq!(
+        input_rx.recv().await.expect("main enter release"),
+        &b"\x1b[13;1:3u"[..]
+    );
+
+    // Disconnect synthesizes only the still-held keypad Enter release.
+    assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 1 }));
+    assert_eq!(
+        input_rx
+            .recv()
+            .await
+            .expect("disconnect synthesized keypad enter release"),
+        &b"\x1b[57414;1:3u"[..]
+    );
+    assert!(input_rx.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
 // Pixel mouse is a Unix client capability.
 #[cfg(unix)]
 #[tokio::test]

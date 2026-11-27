@@ -41,6 +41,7 @@ pub enum KeyIdentity {
     #[cfg(any(windows, test))]
     Physical(PhysicalKeyId),
     Semantic(KeyCode),
+    KeypadEnter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,7 @@ pub struct TerminalKey {
     pub repeat_count: u16,
     pub shifted_codepoint: Option<u32>,
     pub generated_text: Option<String>,
+    keypad_enter: bool,
     physical_identity_hint: bool,
     windows_dead_key: bool,
     /// The layout character a non-Latin Ctrl chord was reported with before it
@@ -96,11 +98,21 @@ impl TerminalKey {
             repeat_count: 1,
             shifted_codepoint: None,
             generated_text: None,
+            keypad_enter: false,
             physical_identity_hint: false,
             windows_dead_key: false,
             layout_key: None,
             source: KeySource::Synthesized,
         }
+    }
+
+    pub(crate) fn with_keypad_enter(mut self, keypad_enter: bool) -> Self {
+        self.keypad_enter = keypad_enter && self.code == KeyCode::Enter;
+        self
+    }
+
+    pub(crate) fn is_keypad_enter(&self) -> bool {
+        self.keypad_enter
     }
 
     pub(crate) fn with_layout_key(mut self, key: Option<char>) -> Self {
@@ -210,6 +222,9 @@ impl TerminalKey {
     }
 
     pub(crate) fn identity(&self) -> KeyIdentity {
+        if self.keypad_enter {
+            return KeyIdentity::KeypadEnter;
+        }
         match self.source {
             #[cfg(any(windows, test))]
             KeySource::WindowsConsole {
@@ -263,13 +278,24 @@ impl TerminalKey {
     }
 
     pub fn as_key_event(&self) -> KeyEvent {
-        KeyEvent::new_with_kind(self.code, self.modifiers, self.kind)
+        let state = if self.keypad_enter {
+            crossterm::event::KeyEventState::KEYPAD
+        } else {
+            crossterm::event::KeyEventState::NONE
+        };
+        KeyEvent::new_with_kind_and_state(self.code, self.modifiers, self.kind, state)
     }
 }
 
 impl From<KeyEvent> for TerminalKey {
     fn from(value: KeyEvent) -> Self {
-        Self::new(value.code, value.modifiers).with_kind(value.kind)
+        Self::new(value.code, value.modifiers)
+            .with_kind(value.kind)
+            .with_keypad_enter(
+                value
+                    .state
+                    .contains(crossterm::event::KeyEventState::KEYPAD),
+            )
     }
 }
 

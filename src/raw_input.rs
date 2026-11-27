@@ -2251,9 +2251,12 @@ mod tests {
                     bytes.len(),
                     "fixture should extract a whole event: {line}"
                 );
+                if let RawInputEvent::Key(key) = &event {
+                    assert_eq!(key.is_keypad_enter(), code == "keypad:enter", "{line}");
+                }
                 assert_raw_key(
                     event,
-                    parse_fixture_key_code(code),
+                    parse_fixture_key_code(code.strip_prefix("keypad:").unwrap_or(code)),
                     parse_fixture_modifiers(modifiers),
                 );
             }

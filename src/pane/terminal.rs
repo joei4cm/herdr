@@ -4996,6 +4996,33 @@ mod tests {
     }
 
     #[test]
+    fn keypad_enter_keeps_its_encoding_in_kitty_and_legacy_modes() {
+        for (input, kitty) in [
+            ("\x1b[57414u", &b"\x1b[57414u"[..]),
+            ("\x1b[57414;3u", &b"\x1b[57414;3u"[..]),
+            ("\x1b[57414;5u", &b"\x1b[57414;5u"[..]),
+        ] {
+            let key = crate::input::parse_terminal_key_sequence(input).expect("keypad key");
+            assert_eq!(
+                test_encode_key_for_app(b"", key.clone()),
+                b"\r",
+                "{input:?}"
+            );
+            assert_eq!(
+                test_encode_key_for_app(b"\x1b[>3u", key),
+                kitty,
+                "{input:?}"
+            );
+        }
+        let release =
+            crate::input::parse_terminal_key_sequence("\x1b[57414;1:3u").expect("keypad release");
+        assert_eq!(
+            test_encode_key_for_app(b"\x1b[>3u", release),
+            b"\x1b[57414;1:3u"
+        );
+    }
+
+    #[test]
     fn ghostty_alt_letters_keep_esc_prefix_on_every_platform() {
         // libghostty treats macOS Option as a text modifier unless told otherwise;
         // Herdr has already decoded Alt from these host bytes.

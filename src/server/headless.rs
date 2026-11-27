@@ -64,9 +64,9 @@ use crate::server::notifications::{
     should_forward_toast_to_clients, toast_message_from_state_change, toast_notify_kind,
 };
 use crate::server::pane_input::{
-    apply_client_pane_input_events, apply_client_popup_input_events,
-    apply_client_terminal_input_events, apply_terminal_attach_input, apply_terminal_attach_scroll,
-    terminal_attach_mouse_position,
+    apply_client_keypad_enter_events, apply_client_pane_input_events,
+    apply_client_popup_input_events, apply_client_terminal_input_events,
+    apply_terminal_attach_input, apply_terminal_attach_scroll, terminal_attach_mouse_position,
 };
 use crate::server::shutdown::{ServerStop, ShutdownReason};
 use crate::server::socket_paths::{
@@ -1010,13 +1010,27 @@ impl HeadlessServer {
                     ) else {
                         continue;
                     };
-                    apply_client_pane_input_events(runtime, &[held.release])
+                    match held.release {
+                        crate::server::clients::ClientShellHeldRelease::PaneInput(event) => {
+                            apply_client_pane_input_events(runtime, &[event])
+                        }
+                        crate::server::clients::ClientShellHeldRelease::KeypadEnter(event) => {
+                            apply_client_keypad_enter_events(runtime, &[event])
+                        }
+                    }
                 }
                 ClientShellInputTarget::Popup(terminal_id) => {
                     let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
                         continue;
                     };
-                    apply_client_popup_input_events(runtime, &[held.release])
+                    match held.release {
+                        crate::server::clients::ClientShellHeldRelease::PaneInput(event) => {
+                            apply_client_popup_input_events(runtime, &[event])
+                        }
+                        crate::server::clients::ClientShellHeldRelease::KeypadEnter(event) => {
+                            apply_client_keypad_enter_events(runtime, &[event])
+                        }
+                    }
                 }
             };
             if let Err(err) = result {
@@ -2543,6 +2557,165 @@ impl HeadlessServer {
                     warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
                 }
                 foreground_changed | geometry_changed || scroll_changed
+            }
+            ServerEvent::ClientShellKeypadEnterInput {
+                client_id,
+                target,
+                events,
+            } => {
+                if self.handoff_in_progress
+                    || !self
+                        .clients
+                        .get(&client_id)
+                        .is_some_and(ClientConnection::is_active_shell_client)
+                {
+                    return false;
+                }
+                match target {
+                    crate::protocol::endpoint::EndpointInputTarget::Pane(pane_id) => {
+                        let Some((workspace_index, runtime_pane_id)) =
+                            self.app.parse_pane_id(&pane_id)
+                        else {
+                            return false;
+                        };
+                        let popup_blocks_input = self.app.state.popup_pane.is_some()
+                            && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                        if popup_blocks_input
+                            || !self.shell_client_views_pane(
+                                client_id,
+                                workspace_index,
+                                runtime_pane_id,
+                            )
+                        {
+                            let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
+                                &self.app.terminal_runtimes,
+                                workspace_index,
+                                runtime_pane_id,
+                            ) else {
+                                return false;
+                            };
+                            let releases = events
+                                .into_iter()
+                                .filter(|event| event.kind == protocol::ClientKeyKind::Release)
+                                .collect::<Vec<_>>();
+                            if releases.is_empty() {
+                                return false;
+                            }
+                            if let Some(client) = self.clients.get_mut(&client_id) {
+                                client.track_shell_keypad_enter_input(
+                                    ClientShellInputTarget::Pane(pane_id.clone()),
+                                    &releases,
+                                );
+                            }
+                            let scroll_before = runtime.scroll_metrics();
+                            if let Err(err) = apply_client_keypad_enter_events(runtime, &releases) {
+                                warn!(client_id, pane_id, err = %err, "targeted client shell keypad enter release failed");
+                            }
+                            return runtime.scroll_metrics() != scroll_before;
+                        }
+                        let interaction = events
+                            .iter()
+                            .any(|event| event.kind != protocol::ClientKeyKind::Release);
+                        if let Some(client) = self.clients.get_mut(&client_id) {
+                            client.track_shell_keypad_enter_input(
+                                ClientShellInputTarget::Pane(pane_id.clone()),
+                                &events,
+                            );
+                        }
+                        let foreground_changed =
+                            interaction && self.promote_client_to_foreground(client_id);
+                        let geometry_changed =
+                            interaction && self.claim_shell_tab_geometry(client_id, false);
+                        let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
+                            &self.app.terminal_runtimes,
+                            workspace_index,
+                            runtime_pane_id,
+                        ) else {
+                            return foreground_changed | geometry_changed;
+                        };
+                        let scroll_before = runtime.scroll_metrics();
+                        let input_result = apply_client_keypad_enter_events(runtime, &events);
+                        let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                        match input_result {
+                            Ok(true) => {
+                                self.note_interactive_input(runtime_pane_id, Instant::now());
+                            }
+                            Ok(false) => {}
+                            Err(err) => {
+                                warn!(client_id, pane_id, err = %err, "targeted client shell keypad enter input failed");
+                            }
+                        }
+                        foreground_changed | geometry_changed || scroll_changed
+                    }
+                    crate::protocol::endpoint::EndpointInputTarget::Popup(terminal_id) => {
+                        let Some((popup_terminal_id, popup_pane_id)) = self
+                            .app
+                            .state
+                            .popup_pane
+                            .as_ref()
+                            .map(|popup| (popup.terminal_id.clone(), popup.pane_id))
+                        else {
+                            return false;
+                        };
+                        if popup_terminal_id.as_str() != terminal_id {
+                            return false;
+                        }
+                        if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
+                            let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id)
+                            else {
+                                return false;
+                            };
+                            let releases = events
+                                .into_iter()
+                                .filter(|event| event.kind == protocol::ClientKeyKind::Release)
+                                .collect::<Vec<_>>();
+                            if releases.is_empty() {
+                                return false;
+                            }
+                            if let Some(client) = self.clients.get_mut(&client_id) {
+                                client.track_shell_keypad_enter_input(
+                                    ClientShellInputTarget::Popup(terminal_id.clone()),
+                                    &releases,
+                                );
+                            }
+                            let scroll_before = runtime.scroll_metrics();
+                            if let Err(err) = apply_client_keypad_enter_events(runtime, &releases) {
+                                warn!(client_id, terminal_id, err = %err, "targeted client popup keypad enter release failed");
+                            }
+                            return runtime.scroll_metrics() != scroll_before;
+                        }
+                        let interaction = events
+                            .iter()
+                            .any(|event| event.kind != protocol::ClientKeyKind::Release);
+                        if let Some(client) = self.clients.get_mut(&client_id) {
+                            client.track_shell_keypad_enter_input(
+                                ClientShellInputTarget::Popup(terminal_id.clone()),
+                                &events,
+                            );
+                        }
+                        let foreground_changed =
+                            interaction && self.promote_client_to_foreground(client_id);
+                        let geometry_changed =
+                            interaction && self.claim_shell_tab_geometry(client_id, false);
+                        let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id)
+                        else {
+                            return foreground_changed | geometry_changed;
+                        };
+                        let scroll_before = runtime.scroll_metrics();
+                        let input_result = apply_client_keypad_enter_events(runtime, &events);
+                        let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                        match input_result {
+                            Ok(true) => {
+                                self.note_interactive_input(popup_pane_id, Instant::now());
+                            }
+                            Ok(false) => {}
+                            Err(err) => {
+                                warn!(client_id, terminal_id, err = %err, "targeted client popup keypad enter input failed");
+                            }
+                        }
+                        foreground_changed | geometry_changed || scroll_changed
+                    }
+                }
             }
             ServerEvent::ClientShellEndpointRequestError {
                 client_id,

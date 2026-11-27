@@ -201,11 +201,46 @@ pub(super) fn apply_terminal_attach_input(
 }
 
 #[cfg(test)]
-pub(crate) fn test_apply_client_pane_input_events(
+pub(crate) fn test_apply_client_shell_input_message(
     runtime: &crate::terminal::TerminalRuntime,
-    events: &[ClientPaneInputEvent],
+    message: &crate::protocol::ClientMessage,
 ) -> Result<bool, String> {
-    apply_client_pane_input_events(runtime, events)
+    match message {
+        crate::protocol::ClientMessage::ClientShellPaneInput { events, .. } => {
+            apply_client_pane_input_events(runtime, events)
+        }
+        crate::protocol::ClientMessage::ClientShellPopupInput { events, .. } => {
+            apply_client_popup_input_events(runtime, events)
+        }
+        crate::protocol::ClientMessage::EndpointControl { kind, data }
+            if kind == crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND =>
+        {
+            let payload = crate::protocol::endpoint::decode_keypad_enter_input(data)
+                .map_err(|err| format!("invalid keypad enter input control: {err}"))?;
+            apply_client_keypad_enter_events(runtime, &payload.events)
+        }
+        _ => Ok(false),
+    }
+}
+
+pub(super) fn apply_client_keypad_enter_events(
+    runtime: &crate::terminal::TerminalRuntime,
+    events: &[crate::protocol::endpoint::EndpointKeypadEnterKey],
+) -> Result<bool, String> {
+    let mut keyboard_forwarded = false;
+    for event in events {
+        let key = event.to_terminal_key();
+        let kind = key.kind;
+        runtime.scroll_reset();
+        let bytes = runtime.encode_terminal_key(key);
+        if !bytes.is_empty() {
+            runtime
+                .try_send_bytes(Bytes::from(bytes))
+                .map_err(|err| format!("targeted keypad enter key input failed: {err}"))?;
+            keyboard_forwarded |= kind != KeyEventKind::Release;
+        }
+    }
+    Ok(keyboard_forwarded)
 }
 
 pub(super) fn apply_client_pane_input_events(

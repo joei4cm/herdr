@@ -1216,3 +1216,148 @@ fn committed_text_still_reaches_a_report_all_pane_as_text() {
     let after = state.handle_input_bytes("\u{3042}".as_bytes());
     assert_eq!(pane_text_commits(&after).concat(), "\u{3042}");
 }
+
+#[test]
+fn keypad_enter_falls_back_to_v1_pane_input_when_server_lacks_capability() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    let outcome = state.handle_input_bytes(b"\x1b[57414u\x1b[57414;1:3u");
+    assert_eq!(outcome.requests.len(), 1);
+    let ClientMessage::ClientShellPaneInput { pane_id, events } = &outcome.requests[0] else {
+        panic!("expected v1 pane input fallback without capability");
+    };
+    assert_eq!(pane_id, "pane_1");
+    assert!(matches!(
+        &events[..],
+        [
+            ClientPaneInputEvent::Key {
+                code: crate::protocol::ClientKeyCode::Enter,
+                kind: crate::protocol::ClientKeyKind::Press,
+                ..
+            },
+            ClientPaneInputEvent::Key {
+                code: crate::protocol::ClientKeyCode::Enter,
+                kind: crate::protocol::ClientKeyKind::Release,
+                ..
+            },
+        ]
+    ));
+}
+
+#[test]
+fn negotiated_keypad_enter_preserves_order_around_v1_events_and_batches_adjacent() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.set_keypad_enter_input_supported(true);
+
+    // Interleaved: 'a', keypad Enter press+release (adjacent -> coalesced), 'b'.
+    let outcome = state.handle_input_bytes(b"a\x1b[57414u\x1b[57414;1:3ub");
+    assert_eq!(outcome.requests.len(), 3);
+
+    let ClientMessage::ClientShellPaneInput { pane_id, events } = &outcome.requests[0] else {
+        panic!("expected leading v1 pane input");
+    };
+    assert_eq!(pane_id, "pane_1");
+    assert!(matches!(
+        &events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            ..
+        }]
+    ));
+
+    let ClientMessage::EndpointControl { kind, data } = &outcome.requests[1] else {
+        panic!("expected middle keypad enter endpoint control");
+    };
+    assert_eq!(kind, crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND);
+    let payload = crate::protocol::endpoint::decode_keypad_enter_input(data).unwrap();
+    assert_eq!(
+        payload.target,
+        crate::protocol::endpoint::EndpointInputTarget::Pane("pane_1".into())
+    );
+    assert_eq!(payload.events.len(), 2);
+    assert_eq!(
+        payload.events[0].kind,
+        crate::protocol::ClientKeyKind::Press
+    );
+    assert_eq!(
+        payload.events[1].kind,
+        crate::protocol::ClientKeyKind::Release
+    );
+
+    let ClientMessage::ClientShellPaneInput { pane_id, events } = &outcome.requests[2] else {
+        panic!("expected trailing v1 pane input");
+    };
+    assert_eq!(pane_id, "pane_1");
+    assert!(matches!(
+        &events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('b'),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn negotiated_keypad_enter_preserves_windows_record_and_physical_id() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.set_keypad_enter_input_supported(true);
+
+    let windows_record = crate::input::WindowsKeyRecord {
+        key_down: true,
+        repeat_count: 1,
+        virtual_key_code: 0x0d,
+        virtual_scan_code: 0x1c,
+        unicode: 13,
+        control_key_state: 0x0100,
+    };
+    let press = crate::input::TerminalKey::new(KeyCode::Enter, KeyModifiers::empty())
+        .with_keypad_enter(true)
+        .with_windows_record(windows_record);
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Key(press)]);
+    assert_eq!(outcome.requests.len(), 1);
+    let ClientMessage::EndpointControl { kind, data } = &outcome.requests[0] else {
+        panic!("expected keypad enter endpoint control");
+    };
+    assert_eq!(kind, crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND);
+    let payload = crate::protocol::endpoint::decode_keypad_enter_input(data).unwrap();
+    assert_eq!(payload.events.len(), 1);
+    assert_eq!(payload.events[0].physical_key_id, Some(0x0001_001c));
+    assert_eq!(payload.events[0].windows_record, Some(windows_record));
+}
+
+#[tokio::test]
+async fn test_apply_client_shell_input_message_handles_mixed_v1_and_keypad_enter_requests() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_host_reports_key_releases(true);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.set_keypad_enter_input_supported(true);
+
+    let (runtime, mut rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80, 24, 0, b"", 4096,
+        );
+    // Report all keys (bit 3 = 8) + event types (bit 1 = 2) + disambiguate (bit 0 = 1) => 11,
+    // so main Enter press/release also emit CSI u sequences alongside keypad Enter.
+    runtime.test_process_pty_bytes(b"\x1b[>11u");
+    while rx.try_recv().is_ok() {}
+
+    // Press main Enter, press keypad Enter, release main Enter, release keypad Enter in order.
+    let outcome = state.handle_input_bytes(b"\x1b[13u\x1b[57414u\x1b[13;1:3u\x1b[57414;1:3u");
+    assert_eq!(outcome.requests.len(), 4);
+    for request in &outcome.requests {
+        crate::server::pane_input::test_apply_client_shell_input_message(&runtime, request)
+            .expect("apply shell input message");
+    }
+    let mut delivered = Vec::new();
+    while let Ok(bytes) = rx.try_recv() {
+        delivered.extend_from_slice(&bytes);
+    }
+    assert_eq!(delivered, b"\x1b[13u\x1b[57414u\x1b[13;1:3u\x1b[57414;1:3u");
+}

@@ -31,6 +31,106 @@ pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+pub const KEYPAD_ENTER_INPUT_CAPABILITY: &str = "keypad_enter_input";
+pub const KEYPAD_ENTER_INPUT_KIND: &str = "endpoint.input.keypad-enter.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndpointInputTarget {
+    Pane(String),
+    Popup(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointKeypadEnterKey {
+    pub modifiers: u8,
+    pub kind: super::ClientKeyKind,
+    #[serde(default = "default_repeat_count")]
+    pub repeat_count: u16,
+    #[serde(default = "default_true")]
+    pub tracks_release: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_key_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_record: Option<crate::input::WindowsKeyRecord>,
+}
+
+fn default_repeat_count() -> u16 {
+    1
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointKeypadEnterInput {
+    pub target: EndpointInputTarget,
+    pub events: Vec<EndpointKeypadEnterKey>,
+}
+
+impl EndpointKeypadEnterKey {
+    pub(crate) fn from_terminal_key(key: &crate::input::TerminalKey) -> Option<Self> {
+        if !key.is_keypad_enter() {
+            return None;
+        }
+        Some(Self {
+            modifiers: key.modifiers.bits(),
+            kind: super::ClientKeyKind::from_crossterm(key.kind),
+            repeat_count: key.repeat_count.max(1),
+            tracks_release: key.generated_text.is_none() || key.has_physical_identity(),
+            physical_key_id: key.physical_key_id(),
+            windows_record: key.windows_record(),
+        })
+    }
+
+    pub(crate) fn to_terminal_key(&self) -> crate::input::TerminalKey {
+        self.to_terminal_key_with_windows_source(cfg!(any(windows, test)))
+    }
+
+    fn to_terminal_key_with_windows_source(
+        &self,
+        attach_windows_source: bool,
+    ) -> crate::input::TerminalKey {
+        let mut key = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::from_bits_truncate(self.modifiers),
+        )
+        .with_kind(self.kind.to_crossterm())
+        .with_repeat_count(self.repeat_count)
+        .with_keypad_enter(true)
+        .with_physical_identity_hint(self.physical_key_id.is_some())
+        .with_windows_composition_hint(self.windows_record);
+        #[cfg(any(windows, test))]
+        if attach_windows_source {
+            if let Some(record) = self.windows_record {
+                key = key.with_windows_record(record);
+            }
+        }
+        #[cfg(not(any(windows, test)))]
+        let _ = attach_windows_source;
+        key
+    }
+
+    pub(crate) fn into_release(self) -> Self {
+        Self {
+            modifiers: self.modifiers,
+            kind: super::ClientKeyKind::Release,
+            repeat_count: 1,
+            tracks_release: true,
+            physical_key_id: self.physical_key_id,
+            windows_record: self.windows_record,
+        }
+    }
+}
+
+pub fn keypad_enter_input_message(
+    payload: &EndpointKeypadEnterInput,
+) -> serde_json::Result<super::ClientMessage> {
+    Ok(super::ClientMessage::EndpointControl {
+        kind: KEYPAD_ENTER_INPUT_KIND.into(),
+        data: serde_json::to_string(payload)?,
+    })
+}
+
+pub fn decode_keypad_enter_input(data: &str) -> serde_json::Result<EndpointKeypadEnterInput> {
+    serde_json::from_str(data)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {
@@ -174,6 +274,7 @@ impl EndpointServerWelcome {
                 HEALTH_CHECK_CAPABILITY.into(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 AGENT_COMPLETIONS_CAPABILITY.into(),
+                KEYPAD_ENTER_INPUT_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -385,6 +486,7 @@ mod tests {
                 HEALTH_CHECK_CAPABILITY.to_string(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
                 AGENT_COMPLETIONS_CAPABILITY.to_string(),
+                KEYPAD_ENTER_INPUT_CAPABILITY.to_string(),
             ]
         );
     }
@@ -416,5 +518,53 @@ mod tests {
         value["future_service"] = serde_json::json!("v2");
         let decoded: EndpointServerWelcome = serde_json::from_value(value).unwrap();
         assert_eq!(decoded, welcome);
+    }
+
+    #[test]
+    fn keypad_enter_input_control_roundtrips_windows_record_and_physical_id() {
+        let windows_record = crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 2,
+            virtual_key_code: 0x0d,
+            virtual_scan_code: 0x1c,
+            unicode: 13,
+            control_key_state: 0x0100,
+        };
+        let source = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::SHIFT,
+        )
+        .with_keypad_enter(true)
+        .with_windows_record(windows_record);
+        let wire_key =
+            EndpointKeypadEnterKey::from_terminal_key(&source).expect("keypad enter wire key");
+        assert_eq!(wire_key.repeat_count, 2);
+        assert!(wire_key.tracks_release);
+        assert_eq!(wire_key.physical_key_id, Some(0x0001_001c));
+        assert_eq!(wire_key.windows_record, Some(windows_record));
+
+        let payload = EndpointKeypadEnterInput {
+            target: EndpointInputTarget::Pane("w1:p2".into()),
+            events: vec![wire_key],
+        };
+        let super::super::ClientMessage::EndpointControl { kind, data } =
+            keypad_enter_input_message(&payload).unwrap()
+        else {
+            panic!("expected keypad enter endpoint control");
+        };
+        assert_eq!(kind, KEYPAD_ENTER_INPUT_KIND);
+        let decoded = decode_keypad_enter_input(&data).unwrap();
+        assert_eq!(decoded, payload);
+
+        let reconstructed = decoded.events[0].to_terminal_key();
+        assert!(reconstructed.is_keypad_enter());
+        assert_eq!(reconstructed.code, crossterm::event::KeyCode::Enter);
+        assert_eq!(
+            reconstructed.modifiers,
+            crossterm::event::KeyModifiers::SHIFT
+        );
+        assert_eq!(reconstructed.repeat_count, 2);
+        assert_eq!(reconstructed.physical_key_id(), Some(0x0001_001c));
+        assert_eq!(reconstructed.windows_record(), Some(windows_record));
     }
 }

@@ -21,6 +21,7 @@ pub(crate) struct ClientShellEndpoint {
     pub(crate) agent_view_projection: Option<ClientEndpointAgentViewProjection>,
     pending_agent_view_projection: Option<ClientEndpointAgentViewProjection>,
     pub(crate) agent_view_projection_supported: bool,
+    pub(crate) keypad_enter_input_supported: bool,
     pub(crate) methods: Option<HashSet<String>>,
 }
 
@@ -87,6 +88,8 @@ impl ClientShellState {
                     .and_then(|endpoint| endpoint.pending_agent_view_projection.clone()),
                 agent_view_projection_supported: previous
                     .is_some_and(|endpoint| endpoint.agent_view_projection_supported),
+                keypad_enter_input_supported: previous
+                    .is_some_and(|endpoint| endpoint.keypad_enter_input_supported),
                 methods: previous.and_then(|endpoint| endpoint.methods.clone()),
             });
         }
@@ -133,6 +136,7 @@ impl ClientShellState {
             endpoint.agent_view_projection = None;
             endpoint.pending_agent_view_projection = None;
             endpoint.agent_view_projection_supported = false;
+            endpoint.keypad_enter_input_supported = false;
         }
     }
 
@@ -188,6 +192,33 @@ impl ClientShellState {
                 endpoint.pending_agent_view_projection = None;
             }
         }
+    }
+
+    pub(crate) fn set_endpoint_keypad_enter_input_supported(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        supported: bool,
+    ) {
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+        {
+            endpoint.keypad_enter_input_supported = supported;
+        }
+    }
+
+    pub(super) fn active_endpoint_supports_keypad_enter_input(&self) -> bool {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
+            .is_some_and(|endpoint| endpoint.keypad_enter_input_supported)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_keypad_enter_input_supported(&mut self, supported: bool) {
+        let active = self.active_endpoint_id.clone();
+        self.set_endpoint_keypad_enter_input_supported(&active, supported);
     }
 
     pub(crate) fn set_endpoint_methods_for(
@@ -741,6 +772,7 @@ pub(super) fn local_endpoint() -> ClientShellEndpoint {
         agent_view_projection: None,
         pending_agent_view_projection: None,
         agent_view_projection_supported: false,
+        keypad_enter_input_supported: false,
         methods: None,
     }
 }

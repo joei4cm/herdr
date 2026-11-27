@@ -94,6 +94,7 @@ const KEYS: &[KeyDef] = &[
     text("/", ffi::GhosttyKey_GHOSTTY_KEY_SLASH, '/', '?'),
     text("space", ffi::GhosttyKey_GHOSTTY_KEY_SPACE, ' ', ' '),
     func("enter", ffi::GhosttyKey_GHOSTTY_KEY_ENTER),
+    func("numpad_enter", ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER),
     func("tab", ffi::GhosttyKey_GHOSTTY_KEY_TAB),
     func("backspace", ffi::GhosttyKey_GHOSTTY_KEY_BACKSPACE),
     func("escape", ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE),
@@ -309,6 +310,9 @@ impl HerdrPath {
         // Mirrors the client: Herdr pushes Kitty event types on Kitty hosts.
         state.set_host_reports_key_releases(host == HostProfile::Kitty);
         state.set_host_reports_all_keys(host_reports_all);
+        // A current server advertises the keypad input control; old-server
+        // fallback is covered by focused endpoint tests.
+        state.set_keypad_enter_input_supported(true);
         state.set_snapshot(Box::new(snapshot()));
         state.set_pane_surface(surface());
         state
@@ -326,17 +330,22 @@ impl HerdrPath {
 
     /// Collect pane input from one client outcome, the way the client loop does:
     /// side requests (pane focus) are ignored, link lookups get a no-link answer
-    /// and the held mouse events are replayed. Returns true when Herdr kept the
-    /// input for itself.
-    fn absorb(
-        &mut self,
-        outcome: ClientShellInput,
-        events: &mut Vec<ClientPaneInputEvent>,
-    ) -> bool {
+    /// and the held mouse events are replayed. Input messages (v1 pane and
+    /// popup input, negotiated keypad controls) keep their original order.
+    /// Returns true when Herdr kept the input for itself.
+    fn absorb(&mut self, outcome: ClientShellInput, input: &mut Vec<ClientMessage>) -> bool {
         let mut owned = outcome.detach;
         for request in outcome.requests {
-            if let ClientMessage::ClientShellPaneInput { events: batch, .. } = request {
-                events.extend(batch);
+            if matches!(
+                &request,
+                ClientMessage::ClientShellPaneInput { .. }
+                    | ClientMessage::ClientShellPopupInput { .. }
+            ) || matches!(
+                &request,
+                ClientMessage::EndpointControl { kind, .. }
+                    if kind == crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND
+            ) {
+                input.push(request);
             }
         }
         let mut replay = Vec::new();
@@ -371,7 +380,7 @@ impl HerdrPath {
         }
         if !replay.is_empty() {
             let outcome = self.state.replay_mouse_events(replay);
-            owned |= self.absorb(outcome, events);
+            owned |= self.absorb(outcome, input);
         }
         owned
     }
@@ -401,20 +410,24 @@ impl HerdrPath {
     /// Route client outcomes through server pane input and collect the bytes the
     /// pane receives. None when Herdr kept the input for itself.
     fn deliver(&mut self, outcomes: Vec<ClientShellInput>) -> Option<Vec<u8>> {
-        let mut events = Vec::new();
+        let mut input = Vec::new();
         let mut herdr_owned = false;
         for outcome in outcomes {
-            herdr_owned |= self.absorb(outcome, &mut events);
+            herdr_owned |= self.absorb(outcome, &mut input);
         }
         herdr_owned |= self.state.mode != ClientShellMode::Terminal || self.state.overlay.is_some();
         if herdr_owned {
             return None;
         }
         let mut out = Vec::new();
-        if let Err(err) =
-            crate::server::pane_input::test_apply_client_pane_input_events(&self.runtime, &events)
-        {
-            out.extend_from_slice(format!("<server error: {err}>").as_bytes());
+        for message in &input {
+            if let Err(err) = crate::server::pane_input::test_apply_client_shell_input_message(
+                &self.runtime,
+                message,
+            ) {
+                out.extend_from_slice(format!("<server error: {err}>").as_bytes());
+                break;
+            }
         }
         while let Ok(bytes) = self.rx.try_recv() {
             out.extend_from_slice(&bytes);
@@ -1266,6 +1279,24 @@ async fn ime_committed_text_reaches_every_pane_mode_exactly_once() {
             }
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn kitty_keypad_enter_press_and_release_reach_pane() {
+    let mut herdr = HerdrPath::new(HostProfile::Kitty, b"\x1b[>3u");
+    assert_eq!(herdr.feed(b"\x1b[57414u"), Some(b"\x1b[57414u".to_vec()));
+    assert_eq!(
+        herdr.feed(b"\x1b[57414;1:2u"),
+        Some(b"\x1b[57414;1:2u".to_vec())
+    );
+    // Both Enter keys can be held at once without stealing each other's lease.
+    assert_eq!(herdr.feed(b"\x1b[13u"), Some(b"\r".to_vec()));
+    assert_eq!(
+        herdr.feed(b"\x1b[57414;1:3u"),
+        Some(b"\x1b[57414;1:3u".to_vec())
+    );
+    assert_eq!(herdr.feed(b"\x1b[13;1:3u"), Some(Vec::new()));
 }
 
 #[cfg(unix)]

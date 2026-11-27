@@ -33,7 +33,9 @@ kitty_keypad_divide	1b5b35373431303b3175	char:/	-	press
 kitty_keypad_multiply	1b5b35373431313b3175	char:*	-	press
 kitty_keypad_subtract	1b5b35373431323b3175	char:-	-	press
 kitty_keypad_add	1b5b35373431333b3175	char:+	-	press
-kitty_keypad_enter	1b5b35373431343b3175	enter	-	press
+kitty_keypad_enter	1b5b35373431343b3175	keypad:enter	-	press
+kitty_keypad_enter_repeat	1b5b35373431343b313a3275	keypad:enter	-	repeat
+kitty_keypad_enter_release	1b5b35373431343b313a3375	keypad:enter	-	release
 kitty_keypad_equal	1b5b35373431353b3175	char:=	-	press
 kitty_keypad_separator	1b5b35373431363b3175	char:,	-	press
 kitty_functional_up	1b5b35373431393b3175	up	-	press	

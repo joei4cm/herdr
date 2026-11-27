@@ -121,6 +121,49 @@ fn push_target_event(
     }
 }
 
+fn endpoint_input_target(
+    target: ClientInputTarget,
+) -> crate::protocol::endpoint::EndpointInputTarget {
+    match target {
+        ClientInputTarget::Pane(pane_id) => {
+            crate::protocol::endpoint::EndpointInputTarget::Pane(pane_id)
+        }
+        ClientInputTarget::Popup(terminal_id) => {
+            crate::protocol::endpoint::EndpointInputTarget::Popup(terminal_id)
+        }
+    }
+}
+
+fn push_target_keypad_enter(
+    target: ClientInputTarget,
+    key: crate::protocol::endpoint::EndpointKeypadEnterKey,
+    outcome: &mut ClientShellInput,
+) -> bool {
+    let endpoint_target = endpoint_input_target(target);
+    if let Some(ClientMessage::EndpointControl { kind, data }) = outcome.requests.last_mut() {
+        if kind == crate::protocol::endpoint::KEYPAD_ENTER_INPUT_KIND {
+            if let Ok(mut pending) = crate::protocol::endpoint::decode_keypad_enter_input(data) {
+                if pending.target == endpoint_target {
+                    pending.events.push(key.clone());
+                    if let Ok(encoded) = serde_json::to_string(&pending) {
+                        *data = encoded;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    let payload = crate::protocol::endpoint::EndpointKeypadEnterInput {
+        target: endpoint_target,
+        events: vec![key],
+    };
+    let Ok(message) = crate::protocol::endpoint::keypad_enter_input_message(&payload) else {
+        return false;
+    };
+    outcome.requests.push(message);
+    true
+}
+
 fn contains(rect: Rect, point: (u16, u16)) -> bool {
     rect.width > 0
         && rect.height > 0

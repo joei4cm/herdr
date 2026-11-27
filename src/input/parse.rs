@@ -88,6 +88,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
 
     let mut key = TerminalKey::new(code, modifiers)
         .with_kind(kind)
+        .with_keypad_enter(codepoint == 57414)
         .with_layout_key(layout_key);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
@@ -1210,6 +1211,18 @@ mod tests {
     }
 
     #[test]
+    fn kitty_keypad_enter_has_distinct_press_and_release_identity() {
+        let main = parse_terminal_key_sequence("\x1b[13u").unwrap();
+        let press = parse_terminal_key_sequence("\x1b[57414u").unwrap();
+        let release = parse_terminal_key_sequence("\x1b[57414;1:3u").unwrap();
+        assert!(!main.is_keypad_enter());
+        assert!(press.is_keypad_enter());
+        assert!(release.is_keypad_enter());
+        assert_eq!(press.identity(), release.identity());
+        assert_ne!(main.identity(), press.identity());
+    }
+
+    #[test]
     fn kitty_functional_key_matrix_is_covered() {
         let cases = [
             ("\x1b[57399;1u", KeyCode::Char('0')),
@@ -1317,9 +1330,10 @@ mod tests {
             let parsed = parse_terminal_key_sequence(text)
                 .unwrap_or_else(|| panic!("fixture failed to parse: {family}"));
 
+            assert_eq!(parsed.is_keypad_enter(), code == "keypad:enter", "{family}");
             assert_terminal_key_eq(
                 parsed,
-                parse_fixture_key_code(code),
+                parse_fixture_key_code(code.strip_prefix("keypad:").unwrap_or(code)),
                 parse_fixture_modifiers(modifiers),
                 parse_fixture_kind(kind),
                 if shifted.is_empty() {
