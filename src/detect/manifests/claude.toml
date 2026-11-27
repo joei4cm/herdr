@@ -1,5 +1,5 @@
 id = "claude"
-version = "2026.11.25.3"
+version = "2026.11.28.1"
 min_engine_version = 2
 updated_at = "2026-11-25T00:00:00Z"
 aliases = ["claude-code"]
@@ -103,6 +103,14 @@ any = [
     ] },
     { regex = ['(?i)esc\s+to\s+cancel'] },
   ] },
+  # Footers whose middle hint is not a navigate hint at all (issue #5741
+  # follow-up: `ctrl+g to edit in …`). Require at least one `·`-separated
+  # hint segment so a bare select/cancel pair stays unmatched; single-line
+  # only, wrapped novel hints stay for the navigate branches.
+  { all = [
+    { contains = ["enter to select"] },
+    { regex = ['(?i)enter\s+to\s+select[^·\n]*·[^\n]*esc\s+to\s+cancel'] },
+  ] },
 ]
 
 [[rules]]
@@ -115,10 +123,12 @@ visible_blocker = true
 # Bind every control to the same footer. After `enter to select` accept any
 # single-line hint (or two wrapped lines) before `esc to cancel`, so
 # `n to add notes`, `Tab to switch questions`, and similar prompts match
-# (#5741). After the name divider, accept only a counted task panel with
-# marked rows and optional pending overflow. Free-form activity can be
-# newer output (#4573).
-regex = ['(?i)(?:^|\n)[ \t]*enter\s+to\s+(?:confirm|select)(?:[^\n]{0,159}|[ \t]*·[^\n]*\n[ \t]*·?[^\n]{0,159})?\n?[ \t]*esc\s+to\s+\n?[ \t]*cancel[ \t]*\n(?:[ \t]*\n)*[ \t]*─{3,}[^\n]*(?:\n(?:[ \t]*\n)*[ \t]+\d+ tasks? \(\d+ done, (?:\d+ in progress, )?\d+ open\)(?:\n[ \t]+[◻◼✔][ \t]+[^\n]+)+(?:\n[ \t]+…[ \t]+\+\d+[ \t]+pending)?)?(?:\n[ \t]*)*\z']
+# (#5741). The cancel line and the blank lines under the footer may carry a
+# trailing right-hand side-pane column (`│`, issue #5741). After the name
+# divider, accept only a counted task panel with marked rows and optional
+# pending overflow (with an optional completed count, issue #5741).
+# Free-form activity can be newer output (#4573).
+regex = ['(?i)(?:^|\n)[ \t]*enter\s+to\s+(?:confirm|select)(?:[^\n]{0,159}|[ \t]*·[^\n]*\n[ \t]*·?[^\n]{0,159})?\n?[ \t]*esc\s+to\s+\n?[ \t]*cancel[ \t]*(?:│[^\n]*)?\n(?:[ \t]*(?:│[^\n]*)?\n)*[ \t]*─{3,}[^\n]*(?:\n(?:[ \t]*\n)*[ \t]+\d+ tasks? \(\d+ done, (?:\d+ in progress, )?\d+ open\)(?:\n[ \t]+[◻◼✔][ \t]+[^\n]+)+(?:\n[ \t]+…[ \t]+\+\d+[ \t]+pending(?:,[ \t]+\d+[ \t]+completed)?)?)?(?:\n[ \t]*)*\z']
 
 [[rules]]
 id = "dynamic_workflow_prompt"
