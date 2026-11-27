@@ -239,6 +239,7 @@ fn copilot_hook_reports_session_id_from_stdin() {
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent"], "copilot");
     assert_eq!(request["params"]["agent_session_id"], "copilot-session");
+    assert_eq!(request["params"]["session_start_source"], "resume");
     assert!(request["params"].get("state").is_none());
 
     let camel = run_copilot_hook(
@@ -248,6 +249,7 @@ fn copilot_hook_reports_session_id_from_stdin() {
 
     assert_eq!(camel["method"], "pane.report_agent_session");
     assert_eq!(camel["params"]["agent_session_id"], "copilot-camel-session");
+    assert_eq!(camel["params"]["session_start_source"], "new");
     assert!(camel["params"].get("state").is_none());
 }
 

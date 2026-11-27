@@ -1412,6 +1412,11 @@ impl TerminalState {
                     "qwen",
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
+                | (
+                    "herdr:copilot",
+                    "copilot",
+                    Some("startup" | "clear" | "resume" | "new")
+                )
                 | ("herdr:antigravity_cli", "agy", None)
         )
     }
@@ -4950,6 +4955,71 @@ mod tests {
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
             Some("qwen-parent")
+        );
+    }
+
+    #[test]
+    fn copilot_lifecycle_session_ref_replaces_existing_session_ref() {
+        for session_start_source in ["startup", "clear", "resume", "new"] {
+            let mut terminal = test_terminal();
+            terminal
+                .set_agent_session_ref(
+                    "herdr:copilot".into(),
+                    "copilot".into(),
+                    crate::agent_resume::AgentSessionRef::id("copilot-session"),
+                    Some(20),
+                )
+                .expect("initial session should be accepted");
+
+            let next_session = format!("copilot-{session_start_source}-session");
+            let mutation = terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:copilot".into(),
+                    "copilot".into(),
+                    crate::agent_resume::AgentSessionRef::id(&next_session),
+                    Some(21),
+                    Some(session_start_source.into()),
+                )
+                .unwrap_or_else(|| panic!("{session_start_source} should replace the session"));
+
+            assert!(mutation.session_ref_changed);
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| session.session_ref.value.as_str()),
+                Some(next_session.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_unknown_session_start_source_does_not_replace_existing_session_ref() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:copilot".into(),
+                "copilot".into(),
+                crate::agent_resume::AgentSessionRef::id("copilot-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal.set_agent_session_ref_for_session_start(
+            "herdr:copilot".into(),
+            "copilot".into(),
+            crate::agent_resume::AgentSessionRef::id("copilot-branch-session"),
+            Some(21),
+            Some("branch".into()),
+        );
+
+        assert!(mutation.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("copilot-session")
         );
     }
 

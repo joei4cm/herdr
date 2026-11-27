@@ -1184,6 +1184,16 @@ fn claude_v2_integration_status_is_outdated() {
 }
 
 #[test]
+fn copilot_powershell_hook_forwards_known_session_start_sources() {
+    let asset = include_str!("assets/copilot/herdr-agent-state.ps1");
+    assert!(asset.contains("$sessionStartSource = $payload.source"));
+    assert!(asset.contains("--session-start-source"));
+    for source in ["startup", "clear", "resume", "new"] {
+        assert!(asset.contains(&format!("\"{source}\"")));
+    }
+}
+
+#[test]
 fn windows_hooks_decode_stdin_as_utf8() {
     // Windows PowerShell decodes `[Console]::In` with the console input code
     // page, which corrupts UTF-8 hook payloads on non-UTF-8 locales such as

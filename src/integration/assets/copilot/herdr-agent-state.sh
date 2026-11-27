@@ -78,6 +78,11 @@ request = {
     },
 }
 
+if not event or normalize_event(event) == "sessionstart":
+    session_start_source = first_text("source")
+    if session_start_source in {"startup", "clear", "resume", "new"}:
+        request["params"]["session_start_source"] = session_start_source
+
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(0.5)

@@ -53,4 +53,24 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
-& $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+$commandArgs = @(
+    "pane",
+    "report-agent-session",
+    $env:HERDR_PANE_ID,
+    "--source",
+    "herdr:copilot",
+    "--agent",
+    "copilot",
+    "--agent-session-id",
+    $sessionId,
+    "--seq",
+    [string]$seq
+)
+if (-not $eventName -or (Normalize-Event $eventName) -eq "sessionstart") {
+    $sessionStartSource = $payload.source
+    $knownSessionStartSources = @("startup", "clear", "resume", "new")
+    if (($sessionStartSource -is [string]) -and ($knownSessionStartSources -contains $sessionStartSource)) {
+        $commandArgs += @("--session-start-source", $sessionStartSource)
+    }
+}
+& $herdr @commandArgs 2>$null | Out-Null
