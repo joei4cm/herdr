@@ -1,5 +1,5 @@
 id = "agy"
-version = "2026.11.26.1"
+version = "2026.11.28.1"
 min_engine_version = 1
 updated_at = "2026-11-26T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
@@ -64,6 +64,21 @@ id = "dialog_navigate_footer"
 state = "blocked"
 priority = 275
 region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "esc to cancel"]
+
+# Same dialog with a custom statusLine stacked below the footer
+# ("stack_with_default"): the status text merges into the footer row and one
+# more status line lands under it, pushing the "Navigate" hint row out of the
+# two-line window. The three-line window still cannot see a working turn's
+# "─── + esc to cancel" footer, which has no "navigate" hint, nor an idle
+# prompt. Priority stays below dialog_navigate_footer so the tighter rule
+# keeps attribution when both match (#6141 follow-up).
+[[rules]]
+id = "dialog_navigate_footer_statusline"
+state = "blocked"
+priority = 274
+region = "bottom_non_empty_lines(3)"
 visible_blocker = true
 contains = ["navigate", "esc to cancel"]
 
