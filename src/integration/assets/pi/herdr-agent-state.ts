@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=9
+// HERDR_INTEGRATION_VERSION=10
 // @ts-nocheck
 
 import net from "node:net";
@@ -111,6 +111,20 @@ function currentSessionRef(): Record<string, unknown> | undefined {
   return undefined;
 }
 
+function parseDurationEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+const compactionTimeoutMs = parseDurationEnv("HERDR_PI_COMPACTION_TIMEOUT_MS", 900000);
+
 function reportSession(sessionStartSource?: string): Promise<void> {
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
@@ -186,13 +200,15 @@ export default function (pi) {
   let blockedMessage: string | undefined;
   let lastState: AgentState | undefined;
   let lastMessage: string | undefined;
+  let compactionTimer: ReturnType<typeof setTimeout> | undefined;
+  let compactionActive = false;
   let rootSession = false;
 
   function desiredState() {
     if (blockedCount > 0) {
       return { state: "blocked" as const, message: blockedMessage };
     }
-    if (agentActive) {
+    if (agentActive || compactionActive) {
       return { state: "working" as const, message: undefined };
     }
     return { state: "idle" as const, message: undefined };
@@ -206,6 +222,34 @@ export default function (pi) {
     lastState = next.state;
     lastMessage = next.message;
     queueState(next.state, next.message);
+  }
+
+  // Context compaction is not an agent turn, so no agent_start/agent_settled
+  // pair brackets it and the pane would keep reading idle for the whole
+  // compaction. The compaction events bracket it instead (#6209).
+  function beginCompaction() {
+    compactionActive = true;
+    if (compactionTimer) {
+      clearTimeout(compactionTimer);
+    }
+    // A compaction that fails without a completion event would keep the pane
+    // working forever, so the working state is bounded.
+    compactionTimer = setTimeout(() => {
+      compactionTimer = undefined;
+      compactionActive = false;
+      publishState(true);
+    }, compactionTimeoutMs);
+    compactionTimer.unref?.();
+    publishState(true);
+  }
+
+  function endCompaction() {
+    compactionActive = false;
+    if (compactionTimer) {
+      clearTimeout(compactionTimer);
+      compactionTimer = undefined;
+    }
+    publishState(true);
   }
 
   pi.events.on("herdr:blocked", (data) => {
@@ -257,5 +301,31 @@ export default function (pi) {
 
     agentActive = false;
     publishState();
+  });
+
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!rootSession) {
+      return;
+    }
+    beginCompaction();
+    // A cancelled compaction never reaches session_compact, so the abort
+    // signal is the only end event in that case.
+    event?.signal?.addEventListener?.("abort", () => {
+      endCompaction();
+    });
+  });
+
+  pi.on("session_compact", () => {
+    if (!rootSession) {
+      return;
+    }
+    endCompaction();
+  });
+
+  pi.on("session_compact_failed", () => {
+    if (!rootSession) {
+      return;
+    }
+    endCompaction();
   });
 }

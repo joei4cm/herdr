@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
@@ -78,6 +78,7 @@ type QueuedState = {
 
 const idleDebounceMs = parseDurationEnv("HERDR_OMP_IDLE_DEBOUNCE_MS", 250);
 const retryGraceMs = parseDurationEnv("HERDR_OMP_RETRY_GRACE_MS", 2500);
+const compactionTimeoutMs = parseDurationEnv("HERDR_OMP_COMPACTION_TIMEOUT_MS", 900000);
 const retryableErrorPattern =
   /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 let reportSeq = Date.now() * 1000;
@@ -257,6 +258,8 @@ export default function (pi) {
   let lastMessage: string | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let compactionTimer: ReturnType<typeof setTimeout> | undefined;
+  let compactionActive = false;
   let rootSession = false;
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
@@ -285,7 +288,7 @@ export default function (pi) {
     if (failureBlocked) {
       return { state: "blocked" as const, message: failureMessage };
     }
-    if (agentActive || retryHoldActive) {
+    if (agentActive || retryHoldActive || compactionActive) {
       return { state: "working" as const, message: undefined };
     }
     return { state: "idle" as const, message: undefined };
@@ -327,6 +330,30 @@ export default function (pi) {
     retryTimer.unref?.();
   }
 
+  // Context compaction is not an agent turn, so no agent_start/agent_end pair
+  // brackets it and the pane would keep reading idle for the whole
+  // compaction. The compaction events bracket it instead (#6209).
+  function beginCompaction() {
+    compactionActive = true;
+    clearTimer(compactionTimer);
+    // A compaction that fails without emitting session_compact would keep the
+    // pane working forever, so the working state is bounded.
+    compactionTimer = setTimeout(() => {
+      compactionTimer = undefined;
+      compactionActive = false;
+      publishState(true);
+    }, compactionTimeoutMs);
+    compactionTimer.unref?.();
+    publishState(true);
+  }
+
+  function endCompaction() {
+    compactionActive = false;
+    clearTimer(compactionTimer);
+    compactionTimer = undefined;
+    publishState(true);
+  }
+
   function activateRootSession(ctx: any, sessionStartSource = "startup"): boolean {
     if (ctx?.hasUI !== true) {
       return false;
@@ -341,6 +368,9 @@ export default function (pi) {
     clearPendingTimers();
     clearFailureState();
     agentActive = false;
+    compactionActive = false;
+    clearTimer(compactionTimer);
+    compactionTimer = undefined;
     blockedCount = 0;
     blockedMessage = undefined;
   }
@@ -399,6 +429,25 @@ export default function (pi) {
     clearFailureState();
     agentActive = true;
     publishState();
+  });
+
+  pi.on("session_before_compact", (event, ctx) => {
+    if (!rootSession && !activateRootSession(ctx)) {
+      return;
+    }
+    beginCompaction();
+    // A cancelled compaction never reaches session_compact, so the abort
+    // signal is the only end event in that case.
+    event?.signal?.addEventListener?.("abort", () => {
+      endCompaction();
+    });
+  });
+
+  pi.on("session_compact", () => {
+    if (!rootSession) {
+      return;
+    }
+    endCompaction();
   });
 
   pi.on("tool_approval_requested", (event, ctx) => {
@@ -466,6 +515,8 @@ export default function (pi) {
   pi.on("session_shutdown", () => {
     if (rootSession) {
       clearPendingTimers();
+      clearTimer(compactionTimer);
+      compactionTimer = undefined;
     }
   });
 }
