@@ -2449,6 +2449,10 @@ impl HeadlessServer {
                 let scroll_changed = runtime.scroll_metrics() != scroll_before;
                 if keyboard_forwarded {
                     self.note_interactive_input(runtime_pane_id, Instant::now());
+                    // The user is typing into this pane: a pending resume
+                    // retype would overwrite their line (#6246).
+                    self.app
+                        .cancel_agent_resume_retry_for_pane(workspace_index, runtime_pane_id);
                 }
                 if let Err(err) = input_result {
                     warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
@@ -2538,6 +2542,9 @@ impl HeadlessServer {
                 let scroll_changed = runtime.scroll_metrics() != scroll_before;
                 if keyboard_forwarded {
                     self.note_interactive_input(popup_pane_id, Instant::now());
+                    // The user is typing into this pane: a pending resume
+                    // retype would overwrite their line (#6246).
+                    self.app.cancel_agent_resume_retry(&popup_terminal_id);
                 }
                 if let Err(err) = input_result {
                     warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
@@ -3376,6 +3383,7 @@ impl HeadlessServer {
                 .app
                 .start_pending_agent_resumes(now, self.app.pending_agent_resume_due(now));
         }
+        changed |= self.app.retry_eaten_agent_resumes(now);
         changed
     }
 }

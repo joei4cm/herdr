@@ -161,7 +161,24 @@ pub struct TerminalState {
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    pub pending_agent_resume_retry: Option<PendingAgentResumeRetry>,
     pub restore_error: Option<String>,
+}
+
+/// One bounded retype of a resume command that the restored shell may not have
+/// received.
+///
+/// Restore spawns the shell and immediately types the resume command into the
+/// PTY. Anything the shell startup runs before its first read — welcome
+/// banners, `read` checks, terminal background-color queries that switch the
+/// line discipline to raw mode and wait for a reply — consumes pending tty
+/// input, so the typed command can be swallowed before the shell's prompt
+/// exists (#6246). The retype runs later, once the shell is idle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingAgentResumeRetry {
+    pub(crate) argv: Vec<String>,
+    pub(crate) agent: String,
+    pub(crate) due_at: Instant,
 }
 
 impl TerminalState {
@@ -201,6 +218,7 @@ impl TerminalState {
             recent_agent_process_exit: None,
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
+            pending_agent_resume_retry: None,
             restore_error: None,
         }
     }
@@ -2343,6 +2361,7 @@ impl TerminalState {
         self.recent_agent_process_exit = None;
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
+        self.pending_agent_resume_retry = None;
         self.clear_agent_name();
     }
 

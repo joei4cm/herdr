@@ -439,6 +439,14 @@ pub(super) fn runtime_hosts_agent(
     live_runtime_agent(runtime) == Some(expected)
 }
 
+/// Whether any agent currently runs in the pane's foreground job.
+///
+/// Unlike [`runtime_hosts_agent`], this has no test shortcut: the resume retype
+/// gate must observe a bare shell as "no agent" even for test runtimes (#6246).
+pub(super) fn resume_target_running(runtime: &crate::terminal::TerminalRuntime) -> bool {
+    live_runtime_agent(runtime).is_some()
+}
+
 fn live_runtime_agent(runtime: &crate::terminal::TerminalRuntime) -> Option<crate::detect::Agent> {
     let job = crate::detect::foreground_job(runtime.child_pid()?)?;
     crate::detect::identify_agent_in_job(&job)

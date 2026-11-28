@@ -41,6 +41,7 @@ const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500)
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
+const PENDING_AGENT_RESUME_RETYPE_AFTER: Duration = Duration::from_secs(10);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
 
 use ratatui::layout::Rect;
@@ -140,6 +141,7 @@ pub struct App {
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
+    pub(crate) agent_resume_retry_deadline: Option<Instant>,
     pub(crate) pending_host_appearance_deadline: Option<Instant>,
     pane_host_appearance: Option<crate::terminal_theme::HostAppearance>,
     startup_per_agent_delay: Duration,
@@ -664,6 +666,7 @@ impl App {
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
+            agent_resume_retry_deadline: None,
             pending_host_appearance_deadline: None,
             pane_host_appearance: None,
             startup_per_agent_delay: Duration::from_millis(
