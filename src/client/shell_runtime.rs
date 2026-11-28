@@ -824,6 +824,15 @@ pub(super) fn finish_client_shell_input(
             if endpoints.active_surface_available() {
                 write_to_server(endpoints, &request).map_err(ClientError::ConnectionLost)?;
             }
+            // The host terminal belongs to the physical display, not to the endpoint that owns
+            // the presentation. An attached machine renders into the same terminal, so it
+            // needs the same host colors even while another endpoint is presented.
+            for endpoint_id in endpoints.attached_endpoints() {
+                if endpoint_id == *endpoints.active_id() {
+                    continue;
+                }
+                let _ = endpoints.send_to(&endpoint_id, &request);
+            }
             continue;
         }
         // Host focus belongs to a pending target even when the source has gone offline or has
@@ -969,5 +978,76 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn host_color_reaches_every_attached_endpoint() {
+        #[derive(Clone)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<ClientMessage>>>);
+
+        impl endpoint::EndpointTransport for Capture {
+            fn send(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+                self.0.lock().unwrap().push(message.clone());
+                Ok(())
+            }
+        }
+
+        let local_sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let remote_sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut endpoints = endpoint::EndpointRegistry::new(
+            Capture(local_sent.clone()),
+            1,
+            endpoint::EndpointNegotiation::new(Vec::new(), Vec::new()),
+        );
+        let remote = endpoint::ClientEndpointId::Ssh(
+            endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        );
+        // An attached machine holds a connection without owning the presentation.
+        endpoints.insert(
+            remote.clone(),
+            Capture(remote_sent.clone()),
+            1,
+            endpoint::EndpointNegotiation::new(Vec::new(), Vec::new()),
+            false,
+        );
+        let mut state = ClientState::test_new();
+        let outcome = state.shell.as_mut().unwrap().handle_raw_events(vec![
+            crate::raw_input::RawInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color: crate::terminal_theme::RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                },
+            },
+        ]);
+        let mut pending_activation = None;
+        let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
+        let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
+        let mut scheduled_activation = None;
+        finish_client_shell_input(
+            &mut state,
+            outcome,
+            None,
+            &mut endpoints,
+            &mut pending_activation,
+            &mut endpoint_commands,
+            &mut prefix_input_source,
+            &mut scheduled_activation,
+        )
+        .unwrap();
+
+        let expected = ClientMessage::ClientShellHostTheme {
+            update: crate::protocol::ClientHostThemeUpdate::DefaultColor {
+                kind: crate::protocol::ClientHostDefaultColorKind::Background,
+                color: crate::protocol::ClientHostColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                },
+            },
+        };
+        assert_eq!(*local_sent.lock().unwrap(), vec![expected.clone()]);
+        assert_eq!(*remote_sent.lock().unwrap(), vec![expected]);
     }
 }

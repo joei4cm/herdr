@@ -2267,8 +2267,13 @@ impl HeadlessServer {
                 if !client.update_host_theme(&update) {
                     return false;
                 }
-                if !client.shell_surface_active || self.foreground_client_id != Some(client_id) {
-                    return false;
+                // A foreground client owns the shared host theme. When no client owns the
+                // presentation, the client that reports the host terminal still describes the
+                // terminal the panes render into, so its colors stay authoritative.
+                if let Some(foreground_client_id) = self.foreground_client_id {
+                    if foreground_client_id != client_id {
+                        return false;
+                    }
                 }
                 let changed = self.app.set_host_terminal_state(
                     client.host_terminal_theme,

@@ -129,6 +129,11 @@ impl EndpointRegistry {
                 .is_some_and(|connection| connection.surface_active)
     }
 
+    /// Every endpoint that currently holds a connection, presented or not.
+    pub(crate) fn attached_endpoints(&self) -> Vec<ClientEndpointId> {
+        self.connections.keys().cloned().collect()
+    }
+
     pub(crate) fn select_unavailable_local(&mut self) {
         self.active = ClientEndpointId::Local;
         self.freeze_input();

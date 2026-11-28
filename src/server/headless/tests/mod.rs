@@ -4019,6 +4019,43 @@ fn client_shell_host_theme_follows_foreground_client() {
     assert!(!server.app.state.host_terminal_appearance_explicit);
 }
 
+#[test]
+fn client_shell_host_theme_applies_without_a_foreground_client() {
+    let mut server = test_headless_server();
+    server.clients.insert(
+        1,
+        ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            1,
+            RenderEncoding::SemanticFrame,
+            None,
+        ),
+    );
+    // A client that no longer owns the presentation, on a server where no client does.
+    server.clients.get_mut(&1).unwrap().shell_surface_active = false;
+    server.foreground_client_id = None;
+
+    let dark = protocol::ClientHostColor {
+        r: 20,
+        g: 30,
+        b: 40,
+    };
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellHostTheme {
+            client_id: 1,
+            update: protocol::ClientHostThemeUpdate::DefaultColor {
+                kind: protocol::ClientHostDefaultColorKind::Background,
+                color: dark,
+            },
+        })
+    );
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
+    );
+}
+
 #[tokio::test]
 async fn foreground_switch_coalesces_pending_appearance_before_releasing_colors() {
     use crate::terminal::{TerminalId, TerminalRuntime};
